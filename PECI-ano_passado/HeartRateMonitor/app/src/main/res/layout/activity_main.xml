@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- Status text -->
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Aguardando conexão..."
+        android:textAlignment="center"
+        android:textSize="16sp"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Progress bar -->
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Botão para conectar via Bluetooth -->
+    <Button
+        android:id="@+id/bluetoothButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Conectar via Bluetooth"
+        android:layout_marginBottom="24dp"/>
+
+    <!-- Texto para exibir os batimentos cardíacos -->
+    <TextView
+        android:id="@+id/heartRateText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="-- BPM"
+        android:textSize="32sp"
+        android:gravity="center"
+        android:textStyle="bold"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Botão para sair do aplicativo -->
+    <Button
+        android:id="@+id/exitButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Sair"
+        android:layout_marginTop="16dp" />
+</LinearLayout>
