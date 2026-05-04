@@ -1,0 +1,999 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:http/http.dart' as http;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Para o Alerta Sonoro e Vibração
+import 'package:url_launcher/url_launcher.dart'; // Para ligar para o número
+import 'package:mqtt_client/mqtt_client.dart';
+import 'package:mqtt_client/mqtt_server_client.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter_map/flutter_map.dart'; 
+import 'package:latlong2/latlong.dart'; 
+import 'package:shared_preferences/shared_preferences.dart'; 
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SessionManager.init();
+  runApp(const MyApp());
+}
+
+////////////////////////////////////////////////////
+/// 💾 GESTOR DE SESSÃO
+////////////////////////////////////////////////////
+class SessionManager {
+  static late SharedPreferences prefs;
+  static bool hasActiveSession = false;
+  static String activityType = "Caminhada";
+  static DateTime? startTime; 
+  static List<double> temps = [];
+  static double lastLat = 39.3999;
+  static double lastLon = -8.2245;
+  static List<LatLng> route = [];
+  static double distance = 0.0;
+
+  static Future<void> init() async {
+    prefs = await SharedPreferences.getInstance();
+    hasActiveSession = prefs.getBool('hasActiveSession') ?? false;
+    activityType = prefs.getString('activityType') ?? "Caminhada";
+    String? st = prefs.getString('startTime');
+    if (st != null) startTime = DateTime.parse(st);
+    
+    String? tempsJson = prefs.getString('temps');
+    if (tempsJson != null) {
+      List<dynamic> decoded = jsonDecode(tempsJson);
+      temps = decoded.map((e) => (e as num).toDouble()).toList();
+    }
+    
+    String? routeJson = prefs.getString('route');
+    if (routeJson != null) {
+      List<dynamic> decodedRoute = jsonDecode(routeJson);
+      route = decodedRoute.map((e) => LatLng((e['lat'] as num).toDouble(), (e['lon'] as num).toDouble())).toList();
+    }
+    
+    distance = prefs.getDouble('distance') ?? 0.0;
+    lastLat = prefs.getDouble('lastLat') ?? 39.3999;
+    lastLon = prefs.getDouble('lastLon') ?? -8.2245;
+  }
+
+  static Future<void> start(String type) async {
+    hasActiveSession = true;
+    activityType = type;
+    startTime = DateTime.now();
+    temps = [];
+    route = [];
+    distance = 0.0;
+    await prefs.setBool('hasActiveSession', true);
+    await prefs.setString('activityType', type);
+    await prefs.setString('startTime', startTime!.toIso8601String());
+    await prefs.setString('temps', '[]');
+    await prefs.setString('route', '[]');
+    await prefs.setDouble('distance', 0.0);
+  }
+
+  static Future<void> saveProgress(List<double> t, double la, double lo, List<LatLng> r, double d) async {
+    temps = List.from(t);
+    lastLat = la;
+    lastLon = lo;
+    route = List.from(r);
+    distance = d;
+    await prefs.setString('temps', jsonEncode(temps));
+    await prefs.setDouble('lastLat', la);
+    await prefs.setDouble('lastLon', lo);
+    await prefs.setString('route', jsonEncode(route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()));
+    await prefs.setDouble('distance', distance);
+  }
+
+  static Future<void> clear() async {
+    hasActiveSession = false;
+    startTime = null;
+    temps = [];
+    route = [];
+    distance = 0.0;
+    await prefs.clear(); 
+  }
+
+  static int get elapsedSeconds {
+    if (startTime == null) return 0;
+    return DateTime.now().difference(startTime!).inSeconds;
+  }
+
+  static Future<void> adjustStartTimeForPause(int currentSeconds) async {
+    startTime = DateTime.now().subtract(Duration(seconds: currentSeconds));
+    await prefs.setString('startTime', startTime!.toIso8601String());
+  }
+}
+
+////////////////////////////////////////////////////
+/// 🎨 DESIGN SYSTEM
+////////////////////////////////////////////////////
+class AppColors {
+  static const primary = Color(0xFF00D1FF);
+  static const secondary = Color(0xFF6366F1);
+  static const background = Color(0xFF0B0E14);
+  static const surface = Color(0xFF1E293B);
+  static const success = Color(0xFF10B981);
+  static const danger = Color(0xFFEF4444);
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Mobile Heart Box',
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: AppColors.background,
+        colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary, brightness: Brightness.dark),
+        cardTheme: CardThemeData(color: AppColors.surface.withOpacity(0.7), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24))),
+      ),
+      home: SessionManager.hasActiveSession 
+          ? MonitorScreen(atividade: SessionManager.activityType, retomando: true) 
+          : const HomeScreen(),
+    );
+  }
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          Positioned(
+            top: -100, 
+            right: -100, 
+            child: Container(
+              width: 300, 
+              height: 300, 
+              decoration: BoxDecoration(
+                shape: BoxShape.circle, 
+                color: AppColors.primary.withOpacity(0.1)
+              )
+            )
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.all(30), 
+                    decoration: BoxDecoration(
+                      color: AppColors.surface, 
+                      borderRadius: BorderRadius.circular(40), 
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.primary.withOpacity(0.2), 
+                          blurRadius: 40, 
+                          spreadRadius: 10
+                        )
+                      ]
+                    ), 
+                    child: const Icon(Icons.monitor_heart_rounded, size: 100, color: AppColors.primary)
+                  ),
+                  const SizedBox(height: 50),
+                  const Text(
+                    'Mobile Heart Box', 
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 48, 
+                      fontWeight: FontWeight.w900, 
+                      letterSpacing: -1.5
+                    )
+                  ),
+                  // A frase de tecnologia de elite foi removida daqui
+                  const Spacer(),
+                  SizedBox(
+                    width: double.infinity, 
+                    height: 65,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pushReplacement(
+                        context, 
+                        MaterialPageRoute(builder: (_) => const ActivityMenuScreen())
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary, 
+                        foregroundColor: Colors.black, 
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))
+                      ),
+                      child: const Text('ACEDER AO SISTEMA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                    ),
+                  ),
+                  const SizedBox(height: 50),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ActivityMenuScreen extends StatefulWidget {
+  const ActivityMenuScreen({super.key});
+  @override
+  State<ActivityMenuScreen> createState() => _ActivityMenuScreenState();
+}
+
+class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
+  int _currentIndex = 1; // Começa na aba "Monitorização" (Centro)
+  bool isLoading = false;
+  List<ActivityData> activitiesList = [];
+
+  @override
+  void initState() {
+    super.initState();
+    buscarHistoricoDoPC();
+  }
+
+  Future<void> buscarHistoricoDoPC() async {
+    setState(() => isLoading = true);
+    try {
+      final url = Uri.parse('http://172.20.10.6:1880/lista-atividades');
+      final response = await http.get(url).timeout(const Duration(seconds: 15));
+      
+      if (response.statusCode == 200) {
+        List<dynamic> data = json.decode(response.body);
+        List<ActivityData> listaFinal = [];
+
+        for (var item in data) {
+          try {
+            List<double> tempsExtraidas = [];
+            var rawTemps = item['temperatures'];
+            if (rawTemps is List) {
+              tempsExtraidas = rawTemps.map((e) => (e as num).toDouble()).toList();
+            } else if (rawTemps is String) {
+              try {
+                var decoded = jsonDecode(rawTemps);
+                if (decoded is List) tempsExtraidas = decoded.map((e) => (e as num).toDouble()).toList();
+              } catch (_) {
+                tempsExtraidas = rawTemps.split(',').map((e) => double.tryParse(e) ?? 0.0).toList();
+              }
+            }
+
+            List<LatLng> routeExtraida = [];
+            var rawRoute = item['route'];
+            if (rawRoute != null) {
+              try {
+                dynamic decoded = rawRoute;
+                if (rawRoute is String) decoded = jsonDecode(rawRoute);
+                if (decoded is List) {
+                  routeExtraida = decoded.map((e) => LatLng((e['lat'] as num).toDouble(), (e['lon'] as num).toDouble())).toList();
+                }
+              } catch(e) { print("Erro rota: $e"); }
+            }
+
+            double distExtraida = 0.0;
+            if (item['distance'] != null) {
+              distExtraida = double.tryParse(item['distance'].toString()) ?? 0.0;
+            }
+
+            listaFinal.add(ActivityData(
+              id: item['time'],
+              type: item['type'] ?? "Atividade",
+              duration: item['duracao_segundos'] ?? 0,
+              temperatures: tempsExtraidas,
+              route: routeExtraida,
+              distance: distExtraida,
+              min: double.tryParse(item['temp_minima']?.toString() ?? "0") ?? 0.0,
+              avg: double.tryParse(item['temp_media']?.toString() ?? "0") ?? 0.0,
+              max: double.tryParse(item['temp_maxima']?.toString() ?? "0") ?? 0.0,
+            ));
+          } catch (e) { print("Erro ao processar item do histórico: $e"); }
+        }
+
+        if (mounted) setState(() => activitiesList = listaFinal);
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Erro de ligação ao PC")));
+    } finally {
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  void _mostrarDialogoRetomar() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text("Atividade Pendente"),
+        content: const Text("Deseja continuar ou começar uma nova?"),
+        actions: [
+          TextButton(onPressed: () { SessionManager.clear(); Navigator.pop(ctx); Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityScreen())); }, child: const Text("NOVA", style: TextStyle(color: AppColors.danger))),
+          ElevatedButton(onPressed: () { Navigator.pop(ctx); Navigator.push(context, MaterialPageRoute(builder: (_) => MonitorScreen(atividade: SessionManager.activityType, retomando: true))); }, child: const Text("CONTINUAR")),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Widget> pages = [
+      // ABA 0: Esquerda (Configurações)
+      const Center(child: Text("Configurações futuras", style: TextStyle(color: Colors.white24, fontSize: 18))),
+      
+      // ABA 1: Centro (Monitorização)
+      Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: () {
+                if (SessionManager.hasActiveSession) {
+                  _mostrarDialogoRetomar();
+                } else {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityScreen()));
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.all(40),
+                decoration: BoxDecoration(color: AppColors.surface, shape: BoxShape.circle, boxShadow: [BoxShadow(color: AppColors.primary.withOpacity(0.15), blurRadius: 30)]),
+                child: const Icon(Icons.play_arrow_rounded, size: 80, color: AppColors.primary),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text("INICIAR MONITORIZAÇÃO", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+          ],
+        ),
+      ),
+      
+      // ABA 2: Direita (Histórico)
+      RefreshIndicator(
+        onRefresh: buscarHistoricoDoPC,
+        child: ActivityLogScreen(activities: activitiesList, onRefresh: buscarHistoricoDoPC),
+      ),
+    ];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_currentIndex == 0 ? "Configurações" : _currentIndex == 1 ? "Dashboard" : "Histórico"), 
+        backgroundColor: Colors.transparent, 
+        elevation: 0,
+        centerTitle: true,
+      ),
+      body: pages[_currentIndex],
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          setState(() => _currentIndex = index);
+          if (index == 2) buscarHistoricoDoPC();
+        },
+        backgroundColor: const Color(0xFF161B22),
+        selectedItemColor: AppColors.primary,
+        unselectedItemColor: Colors.white24,
+        type: BottomNavigationBarType.fixed,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Configurações'),
+          BottomNavigationBarItem(icon: Icon(Icons.play_circle_filled, size: 40), label: 'Monitorização'),
+          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'Histórico'),
+        ],
+      ),
+    );
+  }
+}
+
+class ActivityScreen extends StatefulWidget {
+  const ActivityScreen({super.key});
+  @override
+  State<ActivityScreen> createState() => _ActivityScreenState();
+}
+
+class _ActivityScreenState extends State<ActivityScreen> {
+  String atividade = 'Caminhada';
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Perfil'), backgroundColor: Colors.transparent),
+      body: Padding(
+        padding: const EdgeInsets.all(30),
+        child: Column(
+          children: [
+            _profileTile('Caminhada', Icons.directions_walk_rounded),
+            const SizedBox(height: 15),
+            _profileTile('Bicicleta', Icons.directions_bike_rounded),
+            const Spacer(),
+            SizedBox(width: double.infinity, height: 65, child: ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MonitorScreen(atividade: atividade))), child: const Text("INICIAR", style: TextStyle(fontWeight: FontWeight.bold)))),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _profileTile(String t, IconData i) {
+    bool sel = atividade == t;
+    return GestureDetector(
+      onTap: () => setState(() => atividade = t),
+      child: Container(
+        padding: const EdgeInsets.all(25),
+        decoration: BoxDecoration(color: sel ? AppColors.primary.withOpacity(0.1) : AppColors.surface, borderRadius: BorderRadius.circular(25), border: Border.all(color: sel ? AppColors.primary : Colors.transparent, width: 2)),
+        child: Row(children: [Icon(i, color: sel ? AppColors.primary : Colors.white60, size: 30), const SizedBox(width: 25), Text(t, style: TextStyle(fontSize: 20, fontWeight: sel ? FontWeight.bold : FontWeight.normal)), const Spacer(), if (sel) const Icon(Icons.check_circle_rounded, color: AppColors.primary)]),
+      ),
+    );
+  }
+}
+
+class MonitorScreen extends StatefulWidget {
+  final String atividade;
+  final bool retomando;
+  const MonitorScreen({super.key, required this.atividade, this.retomando = false});
+  @override
+  State<MonitorScreen> createState() => _MonitorScreenState();
+}
+
+class _MonitorScreenState extends State<MonitorScreen> {
+  MqttServerClient? client;
+  List<double> allTemps = [];
+  double currentTemp = 0;
+  
+  double lat = 39.3999;
+  double lon = -8.2245;
+  List<LatLng> route = [];
+  double distance = 0.0;
+  bool firstGpsLock = false;
+
+  // VARIÁVEL DE CONTROLO DE SINAL GPS
+  bool hasGpsSignal = false; 
+
+  bool connected = false;
+  bool isPaused = false;
+  late Timer timer;
+  int seconds = 0;
+  bool showThermal = false; 
+  bool showMap = false; 
+  Uint8List? imageBytes;
+  final MapController _mapController = MapController();
+
+  // Flag para evitar múltiplos diálogos de queda ao mesmo tempo
+  bool isShowingFallAlert = false;
+
+  // VARIÁVEIS PARA O SENSOR DE PROXIMIDADE
+  String proximityStatus = "CAMINHO_LIVRE";
+  bool blinkState = true;
+  Timer? blinkTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.retomando) {
+      SessionManager.start(widget.atividade);
+    } else {
+      allTemps = SessionManager.temps;
+      lat = SessionManager.lastLat;
+      lon = SessionManager.lastLon;
+      route = SessionManager.route;
+      distance = SessionManager.distance;
+      seconds = SessionManager.elapsedSeconds;
+      if (route.isNotEmpty) {
+        firstGpsLock = true;
+        hasGpsSignal = true; 
+      }
+    }
+    connectMQTT();
+    timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && !isPaused) {
+        setState(() { seconds = SessionManager.elapsedSeconds; });
+        SessionManager.saveProgress(allTemps, lat, lon, route, distance);
+      }
+    });
+
+    // Timer para o efeito de piscar do ícone de perigo
+    blinkTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
+      if (mounted && proximityStatus == "OBSTACULO_PERTO") {
+        setState(() => blinkState = !blinkState);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    timer.cancel();
+    blinkTimer?.cancel();
+    client?.disconnect();
+    super.dispose();
+  }
+
+  Future<void> connectMQTT() async {
+    client = MqttServerClient('172.20.10.6', 'flutter_${DateTime.now().millisecondsSinceEpoch}');
+    try {
+      await client!.connect();
+      setState(() => connected = true);
+      client!.subscribe('heartbox/sensor/thermal', MqttQos.atMostOnce);
+      client!.subscribe('heartbox/cam/image', MqttQos.atMostOnce);
+      client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
+      client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce); // SUBSCREVER TÓPICO DE QUEDA
+      client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce); // SUBSCREVER PROXIMIDADE
+
+      client!.updates?.listen((c) {
+        final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
+        final String topic = c[0].topic;
+        final String payload = String.fromCharCodes(recMess.payload.message);
+
+        if (!mounted) return;
+
+        // LÓGICA DE PROXIMIDADE
+        if (topic == 'heartbox/sensor/proximity') {
+          setState(() {
+            proximityStatus = payload.trim();
+          });
+        }
+
+        // 🚨 LÓGICA DE DETEÇÃO DE QUEDA VINDA DO MQTT COM SOM E VIBRAÇÃO
+        if (topic == 'heartbox/alerts/fall' && payload.contains("ALERTA")) {
+            SystemSound.play(SystemSoundType.alert);
+            HapticFeedback.heavyImpact(); // Vibração adicional para chamar à atenção
+            _mostrarAlertaQueda();
+        }
+
+        if (isPaused) return;
+        setState(() {
+          if (topic == 'heartbox/sensor/thermal') {
+            currentTemp = double.tryParse(payload) ?? currentTemp;
+            allTemps.add(currentTemp);
+          } else if (topic == 'heartbox/cam/image' && showThermal) {
+            imageBytes = base64Decode(payload);
+          } else if (topic == 'heartbox/gps/coords') {
+            
+            // VERIFICAR SE HÁ SINAL GPS OU SE O SENSOR FOI DETETADO
+            if (payload == "Sem sinal GPS" || payload.contains("não detetado") || payload.isEmpty) {
+              hasGpsSignal = false;
+            } else {
+              final coords = payload.split(',');
+              if (coords.length == 2) {
+                hasGpsSignal = true; // SINAL ENCONTRADO
+                double newLat = double.tryParse(coords[0]) ?? lat;
+                double newLon = double.tryParse(coords[1]) ?? lon;
+                LatLng newPoint = LatLng(newLat, newLon);
+                if (!firstGpsLock) {
+                  firstGpsLock = true;
+                  lat = newLat; lon = newLon;
+                  route.add(newPoint);
+                } else if (newLat != lat || newLon != lon) {
+                  distance += const Distance().distance(LatLng(lat, lon), newPoint);
+                  lat = newLat; lon = newLon;
+                  route.add(newPoint);
+                }
+                if (showMap) _mapController.move(newPoint, _mapController.camera.zoom);
+              } else {
+                hasGpsSignal = false; // Sensor não enviou formato correto
+              }
+            }
+          }
+        });
+      });
+    } catch (e) { print(e); }
+  }
+
+  // 🆘 FUNÇÃO PARA MOSTRAR A NOTIFICAÇÃO DE AJUDA
+  void _mostrarAlertaQueda() {
+    if (isShowingFallAlert) return;
+    isShowingFallAlert = true;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false, // Obriga o utilizador a clicar num dos botões
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.danger,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.white, size: 30),
+            SizedBox(width: 10),
+            Text("QUEDA DETETADA!", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          "Precisa de ajuda?",
+          style: TextStyle(color: Colors.white, fontSize: 18),
+          textAlign: TextAlign.center,
+        ),
+        actions: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              TextButton(
+                style: TextButton.styleFrom(backgroundColor: Colors.white.withOpacity(0.2)),
+                onPressed: () {
+                  isShowingFallAlert = false;
+                  Navigator.pop(ctx);
+                },
+                child: const Text("NÃO", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppColors.danger),
+                onPressed: () {
+                  Navigator.pop(ctx); // Fecha este
+                  _mostrarDialogoLigar112(); // Abre o próximo
+                },
+                child: const Text("SIM", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          )
+        ],
+      ),
+    );
+  }
+
+  // 📞 SEGUNDO POP-UP: LIGAR PARA O 112
+  void _mostrarDialogoLigar112() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text("Emergência"),
+        content: const Text("Precisa de ligar ao 112?"),
+        actions: [
+          TextButton(
+            onPressed: () {
+              isShowingFallAlert = false;
+              Navigator.pop(ctx);
+            },
+            child: const Text("NÃO"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () async {
+              isShowingFallAlert = false;
+              Navigator.pop(ctx);
+              final Uri url = Uri.parse('tel:960254309');
+              if (await canLaunchUrl(url)) {
+                await launchUrl(url);
+              }
+            },
+            child: const Text("SIM"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _onWillPop() async {
+    bool? abandonar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text("Deseja abandonar atividade?"),
+        content: const Text("O progresso atual não será guardado no histórico."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CONTINUAR")),
+          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger), onPressed: () { SessionManager.clear(); Navigator.pop(ctx, true); }, child: const Text("TERMINAR")),
+        ],
+      ),
+    );
+    return abandonar ?? false;
+  }
+
+  Future<void> finishActivity() async {
+    setState(() => isPaused = true);
+    final TextEditingController _nameCtrl = TextEditingController(text: widget.atividade);
+    bool? salvar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text("Finalizar Sessão"),
+        content: TextField(controller: _nameCtrl, decoration: const InputDecoration(labelText: "Nome do percurso")),
+        actions: [
+          TextButton(onPressed: () { setState(() => isPaused = false); Navigator.pop(ctx, false); }, child: const Text("VOLTAR")),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("GUARDAR")),
+        ],
+      ),
+    );
+    if (salvar == true) {
+      try {
+        await http.post(Uri.parse('http://172.20.10.6:1880/guardar'), 
+          headers: {"Content-Type": "application/json"},
+          body: json.encode({
+            "type": _nameCtrl.text, 
+            "duration": seconds, 
+            "temperatures": allTemps,
+            "distance": distance,
+            "route": route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()
+          }),
+        );
+      } catch (e) { print(e); }
+      SessionManager.clear();
+      if (mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const ActivityMenuScreen()), (route) => false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) async {
+        if (didPop) return;
+        final bool shouldPop = await _onWillPop();
+        if (shouldPop && context.mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const ActivityMenuScreen()), (route) => false);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.atividade),
+          backgroundColor: Colors.transparent,
+          actions: [
+            IconButton(icon: Icon(Icons.map_rounded, color: showMap ? AppColors.primary : Colors.white38), onPressed: () => setState(() { showMap = !showMap; if(showMap) showThermal = false; })),
+            IconButton(icon: Icon(Icons.camera_alt, color: showThermal ? AppColors.primary : Colors.white38), onPressed: () => setState(() { showThermal = !showThermal; if(showThermal) showMap = false; })),
+            Padding(padding: const EdgeInsets.only(right: 15), child: Icon(Icons.circle, color: connected ? AppColors.success : AppColors.danger, size: 12))
+          ],
+        ),
+        body: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                if (showMap || showThermal)
+                  Container(height: 250, width: double.infinity, margin: const EdgeInsets.only(bottom: 15), decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)), clipBehavior: Clip.antiAlias, child: showMap ? _buildMapWidget() : _buildThermalWidget()),
+                _buildStatCard(isPaused ? "SESSÃO PAUSADA" : "TEMPERATURA ATUAL", "${currentTemp.toStringAsFixed(1)}°C"),
+                const SizedBox(height: 15),
+                Row(children: [
+                  _buildMiniBox("Tempo", _formatTime(seconds), Icons.timer_outlined), 
+                  const SizedBox(width: 15), 
+                  _buildProximityBox() // SUBSTITUÍDO: MÉDIA POR INDICADOR DE CARRO
+                ]),
+                const SizedBox(height: 15),
+                _buildGPSStatusBox(),
+                const SizedBox(height: 20),
+                SizedBox(height: 250, child: _buildLiveChart()),
+                const SizedBox(height: 25),
+                Row(
+                  children: [
+                    Expanded(child: SizedBox(height: 60, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: isPaused ? AppColors.success : Colors.orangeAccent), onPressed: () { setState(() { isPaused = !isPaused; if (!isPaused) SessionManager.adjustStartTimeForPause(seconds); }); }, icon: Icon(isPaused ? Icons.play_arrow : Icons.pause), label: Text(isPaused ? "RETOMAR" : "PAUSAR")))),
+                    const SizedBox(width: 15),
+                    Expanded(child: SizedBox(height: 60, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger), onPressed: finishActivity, child: const Text("CONCLUIR", style: TextStyle(fontWeight: FontWeight.bold))))),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // WIDGET DO MAPA COM LÓGICA DE PERDA DE SINAL
+  Widget _buildMapWidget() {
+    if (!hasGpsSignal) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(20.0),
+          child: Text(
+            "Não é possível encontrar a sua localização!",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+        ),
+      );
+    }
+    return FlutterMap(
+      mapController: _mapController, 
+      options: MapOptions(initialCenter: LatLng(lat, lon), initialZoom: 15), 
+      children: [
+        TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.mobile.heartbox'), 
+        PolylineLayer(polylines: [Polyline(points: route, strokeWidth: 4, color: AppColors.danger)]), 
+        MarkerLayer(markers: [Marker(point: LatLng(lat, lon), width: 50, height: 50, child: const Icon(Icons.location_on, color: AppColors.danger, size: 40))])
+      ]
+    );
+  }
+
+  // WIDGET DE PROXIMIDADE (SUBSTITUI A MÉDIA)
+  Widget _buildProximityBox() {
+    bool isDanger = proximityStatus == "OBSTACULO_PERTO";
+    Color iconColor = isDanger 
+        ? (blinkState ? AppColors.danger : Colors.black) 
+        : AppColors.success;
+    String label = isDanger ? "Perigo!" : "Livre!";
+
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)),
+        child: Row(
+          children: [
+            Icon(Icons.directions_car_filled, color: iconColor, size: 24),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text("Caminho", style: TextStyle(color: Colors.white38, fontSize: 11)),
+                Text(label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: iconColor))
+              ],
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThermalWidget() => imageBytes != null ? Image.memory(imageBytes!, fit: BoxFit.contain, gaplessPlayback: true) : const Center(child: Text("A aguardar vídeo..."));
+  Widget _buildStatCard(String label, String value) => Container(width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 25), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(35)), child: Column(children: [Text(label, style: const TextStyle(color: Colors.white38, fontSize: 11)), Text(value, style: TextStyle(fontSize: 56, fontWeight: FontWeight.w900, color: isPaused ? Colors.white24 : AppColors.primary))]));
+  Widget _buildMiniBox(String l, String v, IconData i) => Expanded(child: Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)), child: Row(children: [Icon(i, color: AppColors.primary, size: 20), const SizedBox(width: 12), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(l, style: const TextStyle(color: Colors.white38, fontSize: 11)), Text(v, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))])])));
+  Widget _buildGPSStatusBox() => Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20)), child: Row(children: [const Icon(Icons.gps_fixed, color: AppColors.success, size: 18), const SizedBox(width: 15), Text("GPS | Dist: ${distance.toStringAsFixed(0)}m", style: const TextStyle(fontFamily: 'monospace', fontSize: 14, fontWeight: FontWeight.bold))]));
+  Widget _buildLiveChart() {
+    List<double> displayTemps = allTemps.length > 30 ? allTemps.sublist(allTemps.length - 30) : allTemps;
+    return LineChart(LineChartData(gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1)), titlesData: FlTitlesData(leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 40, getTitlesWidget: (v, m) => Text("${v.toInt()}°", style: const TextStyle(fontSize: 10, color: Colors.white38)))), bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 30, getTitlesWidget: (v, m) => Text("${v.toInt()}s", style: const TextStyle(fontSize: 10, color: Colors.white38)))), rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)), topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false))), borderData: FlBorderData(show: false), lineBarsData: [LineChartBarData(spots: displayTemps.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(), isCurved: true, color: AppColors.primary, barWidth: 4, dotData: const FlDotData(show: false), belowBarData: BarAreaData(show: true, color: AppColors.primary.withOpacity(0.1)))]));
+  }
+  String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
+}
+
+class ActivityLogScreen extends StatefulWidget {
+  final List<ActivityData> activities;
+  final VoidCallback onRefresh;
+  const ActivityLogScreen({super.key, required this.activities, required this.onRefresh});
+  @override
+  State<ActivityLogScreen> createState() => _ActivityLogScreenState();
+}
+
+class _ActivityLogScreenState extends State<ActivityLogScreen> {
+  Set<String> selectedIds = {};
+  bool isSelectionMode = false;
+
+  Future<void> apagarUnica(String id) async {
+    bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: const Text("Apagar Atividade?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR", style: TextStyle(color: AppColors.danger)))]));
+    if (confirmar == true) { try { await http.delete(Uri.parse('http://172.20.10.6:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
+  }
+  Future<void> apagarMultiplas() async {
+    bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: Text("Apagar ${selectedIds.length} atividades?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR TUDO"))]));
+    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://172.20.10.6:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: ListView.builder(
+        padding: const EdgeInsets.all(20),
+        itemCount: widget.activities.length,
+        itemBuilder: (context, i) {
+          final act = widget.activities[i];
+          final isSelected = selectedIds.contains(act.id);
+          return Card(
+            color: isSelected ? AppColors.primary.withOpacity(0.2) : AppColors.surface, margin: const EdgeInsets.only(bottom: 12),
+            child: ListTile(
+              leading: isSelectionMode ? Checkbox(value: isSelected, onChanged: (_) => setState(() => isSelected ? selectedIds.remove(act.id) : selectedIds.add(act.id!))) : const Icon(Icons.history),
+              title: Text(act.type, style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text("Dist: ${act.distance.toStringAsFixed(0)}m | Média: ${act.avg.toStringAsFixed(1)}°C"),
+              trailing: !isSelectionMode ? IconButton(icon: const Icon(Icons.delete_outline, color: AppColors.danger), onPressed: () => apagarUnica(act.id!)) : null,
+              onLongPress: () => setState(() { isSelectionMode = true; selectedIds.add(act.id!); }),
+              onTap: () => isSelectionMode ? setState(() => isSelected ? selectedIds.remove(act.id) : selectedIds.add(act.id!)) : Navigator.push(context, MaterialPageRoute(builder: (_) => ActivityDetailScreen(activity: act))),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+////////////////////////////////////////////////////
+/// 📊 DETALHES (TABS + GRÁFICO DINÂMICO REDUZIDO + MAPA ESTÁTICO)
+////////////////////////////////////////////////////
+class ActivityDetailScreen extends StatelessWidget {
+  final ActivityData activity;
+  const ActivityDetailScreen({super.key, required this.activity});
+  
+  @override
+  Widget build(BuildContext context) {
+    int totalSecs = activity.temperatures.length;
+    double intervalX = 10.0;
+    
+    if (totalSecs <= 60) intervalX = 10.0;
+    else if (totalSecs <= 300) intervalX = 60.0;
+    else if (totalSecs <= 1800) intervalX = 300.0;
+    else if (totalSecs <= 3600) intervalX = 600.0;
+    else intervalX = 1800.0;
+
+    double spacing = 15.0; 
+    if (totalSecs > 300) spacing = 5.0;
+    if (totalSecs > 1800) spacing = 2.0;
+    if (totalSecs > 3600) spacing = 1.0;
+
+    double dynamicWidth = (totalSecs * spacing);
+    if (dynamicWidth < MediaQuery.of(context).size.width) dynamicWidth = MediaQuery.of(context).size.width;
+
+    LatLngBounds? routeBounds;
+    if (activity.route.length >= 2) routeBounds = LatLngBounds.fromPoints(activity.route);
+
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(activity.type),
+          bottom: const TabBar(
+            indicatorColor: AppColors.primary,
+            tabs: [Tab(icon: Icon(Icons.thermostat), text: "Temperatura"), Tab(icon: Icon(Icons.map_outlined), text: "Percurso")],
+          ),
+        ),
+        body: TabBarView(
+          physics: const NeverScrollableScrollPhysics(),
+          children: [
+            Column(
+              children: [
+                Padding(padding: const EdgeInsets.all(20), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_detBox("MIN", "${activity.min.toStringAsFixed(1)}°"), _detBox("AVG", "${activity.avg.toStringAsFixed(1)}°"), _detBox("MAX", "${activity.max.toStringAsFixed(1)}°")])),
+                const Divider(color: Colors.white10),
+                Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)),
+                    clipBehavior: Clip.antiAlias,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Container(
+                        width: dynamicWidth,
+                        padding: const EdgeInsets.fromLTRB(10, 40, 30, 20),
+                        child: activity.temperatures.isEmpty 
+                          ? const Center(child: Text("Gráfico não disponível"))
+                          : LineChart(
+                            LineChartData(
+                              minX: 0, maxX: activity.temperatures.length > 1 ? activity.temperatures.length.toDouble() - 1 : 1,
+                              minY: (activity.min - 3).clamp(0, 100), maxY: (activity.max + 3).clamp(0, 100),
+                              gridData: FlGridData(show: true, drawVerticalLine: true, getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1), getDrawingVerticalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1)),
+                              titlesData: FlTitlesData(
+                                leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 45, getTitlesWidget: (v, m) => Text("${v.toInt()}°", style: const TextStyle(fontSize: 10, color: Colors.white38)))),
+                                bottomTitles: AxisTitles(sideTitles: SideTitles(
+                                  showTitles: true, reservedSize: 30, interval: intervalX, 
+                                  getTitlesWidget: (v, m) {
+                                    int s = v.toInt();
+                                    if (s == 0) return const Text("0s", style: TextStyle(fontSize: 10, color: Colors.white38));
+                                    if (s < 60) return Text("${s}s", style: const TextStyle(fontSize: 10, color: Colors.white38));
+                                    if (s < 3600) return Text("${s ~/ 60}m", style: const TextStyle(fontSize: 10, color: Colors.white38));
+                                    return Text("${s ~/ 3600}h", style: const TextStyle(fontSize: 10, color: Colors.white38));
+                                  }
+                                )),
+                                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                              ),
+                              borderData: FlBorderData(show: false),
+                              lineBarsData: [LineChartBarData(spots: activity.temperatures.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(), isCurved: true, color: AppColors.primary, barWidth: 5, dotData: const FlDotData(show: false), belowBarData: BarAreaData(show: true, color: AppColors.primary.withOpacity(0.1)))]
+                            ),
+                          ),
+                      ),
+                    ),
+                  ),
+                ),
+                const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10))),
+              ],
+            ),
+            Column(
+              children: [
+                Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)),
+                    clipBehavior: Clip.antiAlias,
+                    child: activity.route.isEmpty 
+                      ? const Center(child: Text("Sem percurso GPS gravado", style: TextStyle(color: Colors.white38)))
+                      : FlutterMap(
+                          options: MapOptions(initialCenter: activity.route.first, initialZoom: 15.0, initialCameraFit: routeBounds != null ? CameraFit.bounds(bounds: routeBounds, padding: const EdgeInsets.all(50)) : null, interactionOptions: const InteractionOptions(flags: InteractiveFlag.none)),
+                          children: [
+                            PolylineLayer(polylines: [Polyline(points: activity.route, color: AppColors.danger, strokeWidth: 6, isDotted: false)]),
+                            MarkerLayer(markers: [
+                              Marker(point: activity.route.first, width: 14, height: 14, child: Container(decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle, border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2))))),
+                              Marker(point: activity.route.last, width: 14, height: 14, child: Container(decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle, border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2))))),
+                            ]),
+                          ],
+                        ),
+                  ),
+                ),
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_summaryBox("TEMPO", _formatTime(activity.duration), Icons.timer_outlined), _summaryBox("DISTÂNCIA", "${activity.distance.toStringAsFixed(0)}m", Icons.directions_walk), _summaryBox("MÉDIA", "${activity.avg.toStringAsFixed(1)}°C", Icons.analytics_outlined)])),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _detBox(String l, String v) => Column(children: [Text(l, style: const TextStyle(fontSize: 10, color: Colors.white38)), Text(v, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))]);
+  Widget _summaryBox(String l, String v, IconData i) => Column(children: [Icon(i, color: AppColors.primary, size: 20), const SizedBox(height: 8), Text(l, style: const TextStyle(fontSize: 10, color: Colors.white38, fontWeight: FontWeight.bold)), const SizedBox(height: 4), Text(v, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))]);
+  String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
+}
+
+class ActivityData {
+  final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
+  final List<LatLng> route; final double distance;
+  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
+}
