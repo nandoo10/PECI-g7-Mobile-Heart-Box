@@ -12,7 +12,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart'; 
 import 'package:shared_preferences/shared_preferences.dart'; 
 import 'package:mobile_scanner/mobile_scanner.dart'; // Para o Leitor de QR Code
-import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // NOVO: Para o Bluetooth
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // FASE 3: Para o Bluetooth
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -468,6 +468,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
+  // --- NOVAS VARIÁVEIS ECG / BPM ---
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -515,6 +516,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     super.dispose();
   }
 
+  // Dispara o piscar do coração quando recebe BPM novo
   void _triggerHeartBlink() {
     heartBlinkTimer?.cancel();
     setState(() => heartBlinkState = true);
@@ -533,6 +535,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
+      // NOVOS TÓPICOS ECG E BPM
       client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
       client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
@@ -587,6 +590,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
               }
             }
           } else if (topic == 'heartbox/heart/ecg') {
+            // ACUMULA PONTOS ECG PARA O GRÁFICO (janela deslizante)
             double val = double.tryParse(payload) ?? 0.0;
             ecgPoints.add(val);
             if (ecgPoints.length > ecgMaxPoints) {
@@ -1222,13 +1226,13 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
                 if (barcode.rawValue != null) {
                   setState(() => isScanning = false); 
                   
-                  String macAddress = barcode.rawValue!;
-                  print("QR Lido: $macAddress");
+                  String qrContent = barcode.rawValue!;
+                  print("QR Lido: $qrContent");
 
-                  // Passamos o MAC Address para a nova página do WiFi! (FASE 3)
+                  // Salta para o formulário passando o texto lido (THERMAL_CAM)
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => WifiConfigScreen(macAddress: macAddress)),
+                    MaterialPageRoute(builder: (_) => WifiConfigScreen(targetName: qrContent)),
                   );
                 }
               }
@@ -1264,8 +1268,8 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
 /// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
 ////////////////////////////////////////////////////
 class WifiConfigScreen extends StatefulWidget {
-  final String macAddress;
-  const WifiConfigScreen({super.key, required this.macAddress});
+  final String targetName; // Recebe o nome lido do QR Code (ex: THERMAL_CAM)
+  const WifiConfigScreen({super.key, required this.targetName});
 
   @override
   State<WifiConfigScreen> createState() => _WifiConfigScreenState();
@@ -1279,8 +1283,8 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   bool isSending = false;
   String statusMessage = "Preencha os dados e clique em Enviar";
 
-  // UUIDs que definimos no código da ESP32
-  final String SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+  // UUIDs de Configuração (Compatíveis com a S3 e a CAM)
+  final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
   final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
   final String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
@@ -1288,62 +1292,62 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   Future<void> _enviarDadosBLE() async {
     setState(() {
       isSending = true;
-      statusMessage = "A procurar a placa ${widget.macAddress} ...";
+      statusMessage = "A procurar placa com o nome: ${widget.targetName}...";
     });
 
     try {
-      // 1. Começa a procurar dispositivos Bluetooth
+      // Começa o rastreio Bluetooth
       FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
 
       bool found = false;
       
-      // Fica à escuta dos resultados
       var subscription = FlutterBluePlus.scanResults.listen((results) async {
         for (ScanResult r in results) {
-          // Verifica se o MAC é igual ou se o nome da placa é o nosso HEARTBOX-S3
-          if (r.device.remoteId.str == widget.macAddress || r.device.advName == "HEARTBOX-S3" || r.advertisementData.advName == "HEARTBOX-S3") {
+          // Validação flexível: Procura pelo nome exato que veio no QR Code
+          if (r.device.advName == widget.targetName || r.advertisementData.advName == widget.targetName) {
             found = true;
             FlutterBluePlus.stopScan();
 
-            setState(() => statusMessage = "Placa encontrada! A conectar...");
+            setState(() => statusMessage = "Placa encontrada! A conectar via BLE...");
             
-            // 2. Conecta à placa
             await r.device.connect();
-            setState(() => statusMessage = "Conectado. A enviar credenciais...");
+            setState(() => statusMessage = "Conectado. A injetar credenciais...");
 
-            // 3. Descobre os serviços
             List<BluetoothService> services = await r.device.discoverServices();
             for (var service in services) {
               if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
                 for (var c in service.characteristics) {
-                  // Envia SSID
+                  // Injeta SSID
                   if (c.uuid.str.toLowerCase() == UUID_SSID) {
                     await c.write(utf8.encode(_ssidController.text));
                   }
-                  // Envia Pass
+                  // Injeta Password
                   if (c.uuid.str.toLowerCase() == UUID_PASS) {
                     await c.write(utf8.encode(_passController.text));
                   }
-                  // Envia IP
+                  // Injeta IP do Servidor
                   if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                    await c.write(utf8.encode(_ipController.text));
+                    // Adiciona a porta 8080 caso o utilizador não tenha escrito
+                    String ipEnvio = _ipController.text;
+                    if (!ipEnvio.contains(':')) {
+                      ipEnvio += ":8080";
+                    }
+                    await c.write(utf8.encode(ipEnvio));
                   }
                 }
               }
             }
 
-            // 4. Desconecta e festeja
             await r.device.disconnect();
             
             if (mounted) {
               setState(() {
-                statusMessage = "✅ Tudo enviado com sucesso! A placa vai reiniciar.";
+                statusMessage = "✅ Configuração enviada! A placa vai reiniciar.";
                 isSending = false;
               });
               
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Credenciais enviadas com sucesso!"), backgroundColor: AppColors.success));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Credenciais aplicadas!"), backgroundColor: AppColors.success));
               
-              // Volta ao Menu Inicial após 2 segundos
               Future.delayed(const Duration(seconds: 2), () {
                 Navigator.pop(context);
               });
@@ -1352,25 +1356,24 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         }
       });
 
-      // Pára o scan após os 10s se não encontrar
       await Future.delayed(const Duration(seconds: 10));
       if (!found) {
         FlutterBluePlus.stopScan();
         if (mounted) {
           setState(() {
             isSending = false;
-            statusMessage = "❌ Placa não encontrada. Ligue a placa e tente novamente.";
+            statusMessage = "❌ Dispositivo não encontrado. Certifique-se de que o BLE está ativo.";
           });
         }
       }
       subscription.cancel();
 
     } catch (e) {
-      print("Erro no BLE: $e");
+      print("Erro BLE: $e");
       if (mounted) {
         setState(() {
           isSending = false;
-          statusMessage = "❌ Ocorreu um erro no Bluetooth.";
+          statusMessage = "❌ Falha na comunicação Bluetooth.";
         });
       }
     }
@@ -1385,10 +1388,9 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Placa detetada: ${widget.macAddress}", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+            Text("Alvo de Configuração: ${widget.targetName}", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
-            // Formulário
             TextField(
               controller: _ssidController,
               decoration: InputDecoration(labelText: "Nome da Rede Wi-Fi (SSID)", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))),
@@ -1407,7 +1409,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             
             const SizedBox(height: 40),
             
-            // Botão de Envio
             SizedBox(
               width: double.infinity,
               height: 60,
