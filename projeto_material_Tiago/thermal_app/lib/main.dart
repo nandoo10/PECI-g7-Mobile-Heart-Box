@@ -46,10 +46,10 @@ class SessionManager {
       temps = decoded.map((e) => (e as num).toDouble()).toList();
     }
 
-    String? bpmsJson = prefs.getString('bpms');
+    String? bpmsJson = prefs.getString('bpms'); // NOVO
     if (bpmsJson != null) {
-      List<dynamic> decoded = jsonDecode(bpmsJson);
-      bpms = decoded.map((e) => (e as num).toInt()).toList();
+      List<dynamic> decodedBpms = jsonDecode(bpmsJson);
+      bpms = decodedBpms.map((e) => (e as num).toInt()).toList();
     }
     
     String? routeJson = prefs.getString('route');
@@ -68,27 +68,27 @@ class SessionManager {
     activityType = type;
     startTime = DateTime.now();
     temps = [];
-    bpms = [];
+    bpms = []; // NOVO
     route = [];
     distance = 0.0;
     await prefs.setBool('hasActiveSession', true);
     await prefs.setString('activityType', type);
     await prefs.setString('startTime', startTime!.toIso8601String());
     await prefs.setString('temps', '[]');
-    await prefs.setString('bpms', '[]');
+    await prefs.setString('bpms', '[]'); // NOVO
     await prefs.setString('route', '[]');
     await prefs.setDouble('distance', 0.0);
   }
 
-  static Future<void> saveProgress(List<double> t, List<int> b, double la, double lo, List<LatLng> r, double d) async {
+  static Future<void> saveProgress(List<double> t, List<int> b, double la, double lo, List<LatLng> r, double d) async { // NOVO PARÂMETRO
     temps = List.from(t);
-    bpms = List.from(b);
+    bpms = List.from(b); // NOVO
     lastLat = la;
     lastLon = lo;
     route = List.from(r);
     distance = d;
     await prefs.setString('temps', jsonEncode(temps));
-    await prefs.setString('bpms', jsonEncode(bpms));
+    await prefs.setString('bpms', jsonEncode(bpms)); // NOVO
     await prefs.setDouble('lastLat', la);
     await prefs.setDouble('lastLon', lo);
     await prefs.setString('route', jsonEncode(route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()));
@@ -99,7 +99,7 @@ class SessionManager {
     hasActiveSession = false;
     startTime = null;
     temps = [];
-    bpms = [];
+    bpms = []; // NOVO
     route = [];
     distance = 0.0;
     await prefs.clear(); 
@@ -268,16 +268,18 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               }
             }
 
-            List<int> bpmsExtraidos = [];
+            List<int> bpmsExtraidos = []; // NOVO
             var rawBpms = item['bpms'];
-            if (rawBpms is List) {
-              bpmsExtraidos = rawBpms.map((e) => (e as num).toInt()).toList();
-            } else if (rawBpms is String) {
-              try {
-                var decoded = jsonDecode(rawBpms);
-                if (decoded is List) bpmsExtraidos = decoded.map((e) => (e as num).toInt()).toList();
-              } catch (_) {
-                bpmsExtraidos = rawBpms.split(',').map((e) => int.tryParse(e) ?? 0).toList();
+            if (rawBpms != null) {
+              if (rawBpms is List) {
+                bpmsExtraidos = rawBpms.map((e) => (e as num).toInt()).toList();
+              } else if (rawBpms is String) {
+                try {
+                  var decoded = jsonDecode(rawBpms);
+                  if (decoded is List) bpmsExtraidos = decoded.map((e) => (e as num).toInt()).toList();
+                } catch (_) {
+                  bpmsExtraidos = rawBpms.split(',').map((e) => int.tryParse(e) ?? 0).toList();
+                }
               }
             }
 
@@ -303,15 +305,15 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               type: item['type'] ?? "Atividade",
               duration: item['duracao_segundos'] ?? 0,
               temperatures: tempsExtraidas,
-              bpms: bpmsExtraidos,
+              bpms: bpmsExtraidos, // NOVO
               route: routeExtraida,
               distance: distExtraida,
-              minTemp: double.tryParse(item['temp_minima']?.toString() ?? "0") ?? 0.0,
-              avgTemp: double.tryParse(item['temp_media']?.toString() ?? "0") ?? 0.0,
-              maxTemp: double.tryParse(item['temp_maxima']?.toString() ?? "0") ?? 0.0,
-              minBpm: int.tryParse(item['bpm_minimo']?.toString() ?? "0") ?? 0,
-              avgBpm: int.tryParse(item['bpm_medio']?.toString() ?? "0") ?? 0,
-              maxBpm: int.tryParse(item['bpm_maximo']?.toString() ?? "0") ?? 0,
+              min: double.tryParse(item['temp_minima']?.toString() ?? "0") ?? 0.0,
+              avg: double.tryParse(item['temp_media']?.toString() ?? "0") ?? 0.0,
+              max: double.tryParse(item['temp_maxima']?.toString() ?? "0") ?? 0.0,
+              minBpm: int.tryParse(item['bpm_minimo']?.toString() ?? "0") ?? 0, // NOVO
+              avgBpm: int.tryParse(item['bpm_medio']?.toString() ?? "0") ?? 0, // NOVO
+              maxBpm: int.tryParse(item['bpm_maximo']?.toString() ?? "0") ?? 0, // NOVO
             ));
           } catch (e) { print("Erro ao processar item do histórico: $e"); }
         }
@@ -480,6 +482,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
+  // --- NOVAS VARIÁVEIS ECG / BPM ---
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -508,7 +511,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && !isPaused) {
         setState(() { seconds = SessionManager.elapsedSeconds; });
-        SessionManager.saveProgress(allTemps, allBpms, lat, lon, route, distance);
+        SessionManager.saveProgress(allTemps, allBpms, lat, lon, route, distance); // NOVO PARÂMETRO
       }
     });
 
@@ -528,6 +531,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     super.dispose();
   }
 
+  // Dispara o piscar do coração quando recebe BPM novo
   void _triggerHeartBlink() {
     heartBlinkTimer?.cancel();
     setState(() => heartBlinkState = true);
@@ -546,6 +550,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
+      // NOVOS TÓPICOS ECG E BPM
       client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
       client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
@@ -600,6 +605,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
               }
             }
           } else if (topic == 'heartbox/heart/ecg') {
+            // ACUMULA PONTOS ECG PARA O GRÁFICO (janela deslizante)
             double val = double.tryParse(payload) ?? 0.0;
             ecgPoints.add(val);
             if (ecgPoints.length > ecgMaxPoints) {
@@ -777,6 +783,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 if (showMap || showThermal)
                   Container(height: 250, width: double.infinity, margin: const EdgeInsets.only(bottom: 15), decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)), clipBehavior: Clip.antiAlias, child: showMap ? _buildMapWidget() : _buildThermalWidget()),
 
+                // SUBSTITUÍDO: card de temperatura + card de batimentos
                 _buildTempAndBpmCards(),
 
                 const SizedBox(height: 15),
@@ -789,6 +796,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 _buildGPSStatusBox(),
                 const SizedBox(height: 20),
 
+                // SUBSTITUÍDO: gráfico ECG em vez do gráfico de temperatura
                 SizedBox(height: 250, child: _buildEcgChart()),
 
                 const SizedBox(height: 25),
@@ -807,9 +815,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
+  // NOVO: Dois cards lado a lado — Temperatura e Batimentos
   Widget _buildTempAndBpmCards() {
     return Row(
       children: [
+        // Card Temperatura
         Expanded(
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
@@ -835,6 +845,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
           ),
         ),
         const SizedBox(width: 15),
+        // Card Batimentos
         Expanded(
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
@@ -850,6 +861,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
+                    // Coração a piscar vermelho quando recebe novos valores
                     AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
                       child: Icon(
@@ -887,6 +899,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
+  // NOVO: Gráfico ECG tipo eletrocardiograma
   Widget _buildEcgChart() {
     if (ecgPoints.isEmpty) {
       return Container(
@@ -1068,7 +1081,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
             child: ListTile(
               leading: isSelectionMode ? Checkbox(value: isSelected, onChanged: (_) => setState(() => isSelected ? selectedIds.remove(act.id) : selectedIds.add(act.id!))) : const Icon(Icons.history),
               title: Text(act.type, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text("Dist: ${act.distance.toStringAsFixed(0)}m | Média: ${act.avgTemp.toStringAsFixed(1)}°C"),
+              subtitle: Text("Dist: ${act.distance.toStringAsFixed(0)}m | Média: ${act.avg.toStringAsFixed(1)}°C"),
               trailing: !isSelectionMode ? IconButton(icon: const Icon(Icons.delete_outline, color: AppColors.danger), onPressed: () => apagarUnica(act.id!)) : null,
               onLongPress: () => setState(() { isSelectionMode = true; selectedIds.add(act.id!); }),
               onTap: () => isSelectionMode ? setState(() => isSelected ? selectedIds.remove(act.id) : selectedIds.add(act.id!)) : Navigator.push(context, MaterialPageRoute(builder: (_) => ActivityDetailScreen(activity: act))),
@@ -1109,9 +1122,8 @@ class ActivityDetailScreen extends StatelessWidget {
     LatLngBounds? routeBounds;
     if (activity.route.length >= 2) routeBounds = LatLngBounds.fromPoints(activity.route);
 
-    // NOVO: Alterado length de 2 para 3 e adicionado o Tab do BPM
     return DefaultTabController(
-      length: 3,
+      length: 3, // NOVO
       child: Scaffold(
         appBar: AppBar(
           title: Text(activity.type),
@@ -1119,7 +1131,7 @@ class ActivityDetailScreen extends StatelessWidget {
             indicatorColor: AppColors.primary,
             tabs: [
               Tab(icon: Icon(Icons.thermostat), text: "Temperatura"), 
-              Tab(icon: Icon(Icons.favorite), text: "BPM"), // NOVO TAB
+              Tab(icon: Icon(Icons.favorite), text: "BPM"), // NOVO
               Tab(icon: Icon(Icons.map_outlined), text: "Percurso")
             ],
           ),
@@ -1127,24 +1139,26 @@ class ActivityDetailScreen extends StatelessWidget {
         body: TabBarView(
           physics: const NeverScrollableScrollPhysics(),
           children: [
-            // ABA 1: Temperatura
             Column(
               children: [
-                Padding(padding: const EdgeInsets.all(20), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_detBox("MIN", "${activity.minTemp.toStringAsFixed(1)}°"), _detBox("AVG", "${activity.avgTemp.toStringAsFixed(1)}°"), _detBox("MAX", "${activity.maxTemp.toStringAsFixed(1)}°")])),
+                Padding(padding: const EdgeInsets.all(20), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_detBox("MIN", "${activity.min.toStringAsFixed(1)}°"), _detBox("AVG", "${activity.avg.toStringAsFixed(1)}°"), _detBox("MAX", "${activity.max.toStringAsFixed(1)}°")])),
                 const Divider(color: Colors.white10),
                 Expanded(
                   child: Container(
-                    margin: const EdgeInsets.all(15), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)), clipBehavior: Clip.antiAlias,
+                    margin: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)),
+                    clipBehavior: Clip.antiAlias,
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Container(
-                        width: dynamicWidth, padding: const EdgeInsets.fromLTRB(10, 40, 30, 20),
+                        width: dynamicWidth,
+                        padding: const EdgeInsets.fromLTRB(10, 40, 30, 20),
                         child: activity.temperatures.isEmpty 
                           ? const Center(child: Text("Gráfico não disponível"))
                           : LineChart(
                             LineChartData(
                               minX: 0, maxX: activity.temperatures.length > 1 ? activity.temperatures.length.toDouble() - 1 : 1,
-                              minY: (activity.minTemp - 3).clamp(0, 100), maxY: (activity.maxTemp + 3).clamp(0, 100),
+                              minY: (activity.min - 3).clamp(0, 100), maxY: (activity.max + 3).clamp(0, 100),
                               gridData: FlGridData(show: true, drawVerticalLine: true, getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1), getDrawingVerticalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1)),
                               titlesData: FlTitlesData(
                                 leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 45, getTitlesWidget: (v, m) => Text("${v.toInt()}°", style: const TextStyle(fontSize: 10, color: Colors.white38)))),
@@ -1172,8 +1186,7 @@ class ActivityDetailScreen extends StatelessWidget {
                 const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10))),
               ],
             ),
-
-            // ABA 2: BPM (NOVA ABA)
+            // NOVO (COLUNA DO BPM)
             Column(
               children: [
                 Padding(padding: const EdgeInsets.all(20), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_detBox("MIN", "${activity.minBpm}"), _detBox("AVG", "${activity.avgBpm}"), _detBox("MAX", "${activity.maxBpm}")])),
@@ -1184,26 +1197,24 @@ class ActivityDetailScreen extends StatelessWidget {
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Container(
-                        // O gráfico usa o mesmo tamanho dinâmico do gráfico de temperatura para ser coerente
-                        width: (activity.bpms.length * spacing) < MediaQuery.of(context).size.width ? MediaQuery.of(context).size.width : (activity.bpms.length * spacing), 
+                        width: (activity.bpms.length * spacing) < MediaQuery.of(context).size.width ? MediaQuery.of(context).size.width : (activity.bpms.length * spacing),
                         padding: const EdgeInsets.fromLTRB(10, 40, 30, 20),
-                        child: activity.bpms.isEmpty 
-                          ? const Center(child: Text("Gráfico não disponível"))
+                        child: activity.bpms.isEmpty
+                          ? const Center(child: Text("Sem dados de BPM", style: TextStyle(color: Colors.white38)))
                           : LineChart(
-                            LineChartData(
-                              minX: 0, maxX: activity.bpms.length > 1 ? activity.bpms.length.toDouble() - 1 : 1,
-                              minY: (activity.minBpm - 10).clamp(0, 250).toDouble(), maxY: (activity.maxBpm + 10).clamp(0, 250).toDouble(),
-                              gridData: FlGridData(show: true, drawVerticalLine: true, getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1), getDrawingVerticalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1)),
-                              titlesData: FlTitlesData(
-                                leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 45, getTitlesWidget: (v, m) => Text("${v.toInt()}", style: const TextStyle(fontSize: 10, color: Colors.white38)))),
-                                bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)), // Oculto na aba BPM para não sujar o visual
-                                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                              LineChartData(
+                                minX: 0, maxX: activity.bpms.length > 1 ? activity.bpms.length.toDouble() - 1 : 1,
+                                minY: (activity.minBpm - 10).clamp(0, 250).toDouble(), maxY: (activity.maxBpm + 10).clamp(0, 250).toDouble(),
+                                gridData: FlGridData(show: true, drawVerticalLine: true, getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1), getDrawingVerticalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1)),
+                                titlesData: FlTitlesData(
+                                  leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 45, getTitlesWidget: (v, m) => Text("${v.toInt()}", style: const TextStyle(fontSize: 10, color: Colors.white38)))),
+                                  bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)), topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                ),
+                                borderData: FlBorderData(show: false),
+                                lineBarsData: [LineChartBarData(spots: activity.bpms.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value.toDouble())).toList(), isCurved: true, color: AppColors.danger, barWidth: 5, dotData: const FlDotData(show: false), belowBarData: BarAreaData(show: true, color: AppColors.danger.withOpacity(0.1)))]
                               ),
-                              borderData: FlBorderData(show: false),
-                              lineBarsData: [LineChartBarData(spots: activity.bpms.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value.toDouble())).toList(), isCurved: true, color: AppColors.danger, barWidth: 5, dotData: const FlDotData(show: false), belowBarData: BarAreaData(show: true, color: AppColors.danger.withOpacity(0.1)))]
                             ),
-                          ),
                       ),
                     ),
                   ),
@@ -1211,13 +1222,13 @@ class ActivityDetailScreen extends StatelessWidget {
                 const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10))),
               ],
             ),
-
-            // ABA 3: Percurso
             Column(
               children: [
                 Expanded(
                   child: Container(
-                    margin: const EdgeInsets.all(20), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)), clipBehavior: Clip.antiAlias,
+                    margin: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)),
+                    clipBehavior: Clip.antiAlias,
                     child: activity.route.isEmpty 
                       ? const Center(child: Text("Sem percurso GPS gravado", style: TextStyle(color: Colors.white38)))
                       : FlutterMap(
@@ -1232,7 +1243,7 @@ class ActivityDetailScreen extends StatelessWidget {
                         ),
                   ),
                 ),
-                Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_summaryBox("TEMPO", _formatTime(activity.duration), Icons.timer_outlined), _summaryBox("DISTÂNCIA", "${activity.distance.toStringAsFixed(0)}m", Icons.directions_walk), _summaryBox("MÉDIA", "${activity.avgTemp.toStringAsFixed(1)}°C", Icons.analytics_outlined)])),
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_summaryBox("TEMPO", _formatTime(activity.duration), Icons.timer_outlined), _summaryBox("DISTÂNCIA", "${activity.distance.toStringAsFixed(0)}m", Icons.directions_walk), _summaryBox("MÉDIA", "${activity.avg.toStringAsFixed(1)}°C", Icons.analytics_outlined)])),
                 const SizedBox(height: 20),
               ],
             ),
@@ -1247,17 +1258,9 @@ class ActivityDetailScreen extends StatelessWidget {
   String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
 }
 
-// NOVO: Modelo de Dados foi atualizado para conter as arrays de BPM
 class ActivityData {
-  final String? id; final String type; final int duration; 
-  final List<double> temperatures; final double minTemp, avgTemp, maxTemp; 
-  final List<int> bpms; final int minBpm, avgBpm, maxBpm; // NOVO
+  final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
   final List<LatLng> route; final double distance;
-  
-  ActivityData({
-    this.id, required this.type, required this.duration, 
-    required this.temperatures, required this.minTemp, required this.avgTemp, required this.maxTemp, 
-    required this.bpms, required this.minBpm, required this.avgBpm, required this.maxBpm, 
-    this.route = const [], this.distance = 0.0
-  });
+  final List<int> bpms; final int minBpm, avgBpm, maxBpm; // NOVO
+  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0, this.bpms = const [], this.minBpm = 0, this.avgBpm = 0, this.maxBpm = 0}); // NOVO
 }
