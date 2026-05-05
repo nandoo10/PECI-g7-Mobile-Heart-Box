@@ -1023,11 +1023,11 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
 
   Future<void> apagarUnica(String id) async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: const Text("Apagar Atividade?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR", style: TextStyle(color: AppColors.danger)))]));
-    if (confirmar == true) { try { await http.delete(Uri.parse('http://172.20.10.4:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
+    if (confirmar == true) { try { await http.post(Uri.parse('http://172.20.10.4:1880/apagar-atividade'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
   }
   Future<void> apagarMultiplas() async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: Text("Apagar ${selectedIds.length} atividades?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR TUDO"))]));
-    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://172.20.10.4:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
+    if (confirmar == true) { for (var id in selectedIds) { try { await http.post(Uri.parse('http://172.20.10.4:1880/apagar-atividade'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
   }
 
   @override
