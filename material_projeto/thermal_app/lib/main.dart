@@ -186,7 +186,6 @@ class HomeScreen extends StatelessWidget {
                       letterSpacing: -1.5
                     )
                   ),
-                  // A frase de tecnologia de elite foi removida daqui
                   const Spacer(),
                   SizedBox(
                     width: double.infinity, 
@@ -201,7 +200,7 @@ class HomeScreen extends StatelessWidget {
                         foregroundColor: Colors.black, 
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))
                       ),
-                      child: const Text('ACEDER AO SISTEMA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                      child: const Text('ACEDER AO SISTEMA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     ),
                   ),
                   const SizedBox(height: 50),
@@ -222,7 +221,7 @@ class ActivityMenuScreen extends StatefulWidget {
 }
 
 class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
-  int _currentIndex = 1; // Começa na aba "Monitorização" (Centro)
+  int _currentIndex = 1;
   bool isLoading = false;
   List<ActivityData> activitiesList = [];
 
@@ -235,7 +234,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   Future<void> buscarHistoricoDoPC() async {
     setState(() => isLoading = true);
     try {
-      final url = Uri.parse('http://172.20.10.6:1880/lista-atividades');
+      final url = Uri.parse('http://172.20.10.4:1880/lista-atividades');
       final response = await http.get(url).timeout(const Duration(seconds: 15));
       
       if (response.statusCode == 200) {
@@ -315,10 +314,8 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // ABA 0: Esquerda (Configurações)
       const Center(child: Text("Configurações futuras", style: TextStyle(color: Colors.white24, fontSize: 18))),
       
-      // ABA 1: Centro (Monitorização)
       Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -343,7 +340,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
         ),
       ),
       
-      // ABA 2: Direita (Histórico)
       RefreshIndicator(
         onRefresh: buscarHistoricoDoPC,
         child: ActivityLogScreen(activities: activitiesList, onRefresh: buscarHistoricoDoPC),
@@ -437,7 +433,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
   double distance = 0.0;
   bool firstGpsLock = false;
 
-  // VARIÁVEL DE CONTROLO DE SINAL GPS
   bool hasGpsSignal = false; 
 
   bool connected = false;
@@ -449,13 +444,18 @@ class _MonitorScreenState extends State<MonitorScreen> {
   Uint8List? imageBytes;
   final MapController _mapController = MapController();
 
-  // Flag para evitar múltiplos diálogos de queda ao mesmo tempo
   bool isShowingFallAlert = false;
 
-  // VARIÁVEIS PARA O SENSOR DE PROXIMIDADE
   String proximityStatus = "CAMINHO_LIVRE";
   bool blinkState = true;
   Timer? blinkTimer;
+
+  // --- NOVAS VARIÁVEIS ECG / BPM ---
+  List<double> ecgPoints = [];
+  int currentBpm = 0;
+  bool heartBlinkState = false;
+  Timer? heartBlinkTimer;
+  static const int ecgMaxPoints = 100;
 
   @override
   void initState() {
@@ -482,7 +482,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
       }
     });
 
-    // Timer para o efeito de piscar do ícone de perigo
     blinkTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
       if (mounted && proximityStatus == "OBSTACULO_PERTO") {
         setState(() => blinkState = !blinkState);
@@ -494,20 +493,33 @@ class _MonitorScreenState extends State<MonitorScreen> {
   void dispose() {
     timer.cancel();
     blinkTimer?.cancel();
+    heartBlinkTimer?.cancel();
     client?.disconnect();
     super.dispose();
   }
 
+  // Dispara o piscar do coração quando recebe BPM novo
+  void _triggerHeartBlink() {
+    heartBlinkTimer?.cancel();
+    setState(() => heartBlinkState = true);
+    heartBlinkTimer = Timer(const Duration(milliseconds: 300), () {
+      if (mounted) setState(() => heartBlinkState = false);
+    });
+  }
+
   Future<void> connectMQTT() async {
-    client = MqttServerClient('172.20.10.6', 'flutter_${DateTime.now().millisecondsSinceEpoch}');
+    client = MqttServerClient('172.20.10.4', 'flutter_${DateTime.now().millisecondsSinceEpoch}');
     try {
       await client!.connect();
       setState(() => connected = true);
       client!.subscribe('heartbox/sensor/thermal', MqttQos.atMostOnce);
       client!.subscribe('heartbox/cam/image', MqttQos.atMostOnce);
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
-      client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce); // SUBSCREVER TÓPICO DE QUEDA
-      client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce); // SUBSCREVER PROXIMIDADE
+      client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
+      client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
+      // NOVOS TÓPICOS ECG E BPM
+      client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
+      client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
       client!.updates?.listen((c) {
         final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
@@ -516,17 +528,15 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
         if (!mounted) return;
 
-        // LÓGICA DE PROXIMIDADE
         if (topic == 'heartbox/sensor/proximity') {
           setState(() {
             proximityStatus = payload.trim();
           });
         }
 
-        // 🚨 LÓGICA DE DETEÇÃO DE QUEDA VINDA DO MQTT COM SOM E VIBRAÇÃO
         if (topic == 'heartbox/alerts/fall' && payload.contains("ALERTA")) {
             SystemSound.play(SystemSoundType.alert);
-            HapticFeedback.heavyImpact(); // Vibração adicional para chamar à atenção
+            HapticFeedback.heavyImpact();
             _mostrarAlertaQueda();
         }
 
@@ -538,14 +548,12 @@ class _MonitorScreenState extends State<MonitorScreen> {
           } else if (topic == 'heartbox/cam/image' && showThermal) {
             imageBytes = base64Decode(payload);
           } else if (topic == 'heartbox/gps/coords') {
-            
-            // VERIFICAR SE HÁ SINAL GPS OU SE O SENSOR FOI DETETADO
             if (payload == "Sem sinal GPS" || payload.contains("não detetado") || payload.isEmpty) {
               hasGpsSignal = false;
             } else {
               final coords = payload.split(',');
               if (coords.length == 2) {
-                hasGpsSignal = true; // SINAL ENCONTRADO
+                hasGpsSignal = true;
                 double newLat = double.tryParse(coords[0]) ?? lat;
                 double newLon = double.tryParse(coords[1]) ?? lon;
                 LatLng newPoint = LatLng(newLat, newLon);
@@ -560,23 +568,33 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 }
                 if (showMap) _mapController.move(newPoint, _mapController.camera.zoom);
               } else {
-                hasGpsSignal = false; // Sensor não enviou formato correto
+                hasGpsSignal = false;
               }
             }
+          } else if (topic == 'heartbox/heart/ecg') {
+            // ACUMULA PONTOS ECG PARA O GRÁFICO (janela deslizante)
+            double val = double.tryParse(payload) ?? 0.0;
+            ecgPoints.add(val);
+            if (ecgPoints.length > ecgMaxPoints) {
+              ecgPoints.removeAt(0);
+            }
+          } else if (topic == 'heartbox/heart/bpm') {
+            int newBpm = int.tryParse(payload) ?? 0;
+            currentBpm = newBpm;
+            if (newBpm > 0) _triggerHeartBlink();
           }
         });
       });
     } catch (e) { print(e); }
   }
 
-  // 🆘 FUNÇÃO PARA MOSTRAR A NOTIFICAÇÃO DE AJUDA
   void _mostrarAlertaQueda() {
     if (isShowingFallAlert) return;
     isShowingFallAlert = true;
 
     showDialog(
       context: context,
-      barrierDismissible: false, // Obriga o utilizador a clicar num dos botões
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.danger,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -607,8 +625,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppColors.danger),
                 onPressed: () {
-                  Navigator.pop(ctx); // Fecha este
-                  _mostrarDialogoLigar112(); // Abre o próximo
+                  Navigator.pop(ctx);
+                  _mostrarDialogoLigar112();
                 },
                 child: const Text("SIM", style: TextStyle(fontWeight: FontWeight.bold)),
               ),
@@ -619,7 +637,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // 📞 SEGUNDO POP-UP: LIGAR PARA O 112
   void _mostrarDialogoLigar112() {
     showDialog(
       context: context,
@@ -686,7 +703,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
     if (salvar == true) {
       try {
-        await http.post(Uri.parse('http://172.20.10.6:1880/guardar'), 
+        await http.post(Uri.parse('http://172.20.10.4:1880/guardar'), 
           headers: {"Content-Type": "application/json"},
           body: json.encode({
             "type": _nameCtrl.text, 
@@ -728,17 +745,23 @@ class _MonitorScreenState extends State<MonitorScreen> {
               children: [
                 if (showMap || showThermal)
                   Container(height: 250, width: double.infinity, margin: const EdgeInsets.only(bottom: 15), decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)), clipBehavior: Clip.antiAlias, child: showMap ? _buildMapWidget() : _buildThermalWidget()),
-                _buildStatCard(isPaused ? "SESSÃO PAUSADA" : "TEMPERATURA ATUAL", "${currentTemp.toStringAsFixed(1)}°C"),
+
+                // SUBSTITUÍDO: card de temperatura + card de batimentos
+                _buildTempAndBpmCards(),
+
                 const SizedBox(height: 15),
                 Row(children: [
                   _buildMiniBox("Tempo", _formatTime(seconds), Icons.timer_outlined), 
                   const SizedBox(width: 15), 
-                  _buildProximityBox() // SUBSTITUÍDO: MÉDIA POR INDICADOR DE CARRO
+                  _buildProximityBox()
                 ]),
                 const SizedBox(height: 15),
                 _buildGPSStatusBox(),
                 const SizedBox(height: 20),
-                SizedBox(height: 250, child: _buildLiveChart()),
+
+                // SUBSTITUÍDO: gráfico ECG em vez do gráfico de temperatura
+                SizedBox(height: 250, child: _buildEcgChart()),
+
                 const SizedBox(height: 25),
                 Row(
                   children: [
@@ -755,7 +778,179 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // WIDGET DO MAPA COM LÓGICA DE PERDA DE SINAL
+  // NOVO: Dois cards lado a lado — Temperatura e Batimentos
+  Widget _buildTempAndBpmCards() {
+    return Row(
+      children: [
+        // Card Temperatura
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isPaused ? "TEMPERATURA (PAUSADO)" : "TEMPERATURA ATUAL",
+                  style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "${currentTemp.toStringAsFixed(1)}°C",
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w900,
+                    color: isPaused ? Colors.white24 : AppColors.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 15),
+        // Card Batimentos
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "BATIMENTOS",
+                  style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    // Coração a piscar vermelho quando recebe novos valores
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      child: Icon(
+                        Icons.favorite,
+                        color: heartBlinkState ? AppColors.danger : AppColors.danger.withOpacity(0.3),
+                        size: heartBlinkState ? 28 : 22,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    currentBpm == 0
+                        ? const Text(
+                            "Sem\nbatimentos",
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white38,
+                              height: 1.2,
+                            ),
+                          )
+                        : Text(
+                            "$currentBpm bpm",
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                              color: isPaused ? Colors.white24 : AppColors.danger,
+                            ),
+                          ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // NOVO: Gráfico ECG tipo eletrocardiograma
+  Widget _buildEcgChart() {
+    if (ecgPoints.isEmpty) {
+      return Container(
+        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)),
+        child: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.monitor_heart_outlined, color: Colors.white24, size: 40),
+              SizedBox(height: 8),
+              Text("A aguardar sinal ECG...", style: TextStyle(color: Colors.white24)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final spots = ecgPoints.asMap().entries
+        .map((e) => FlSpot(e.key.toDouble(), e.value))
+        .toList();
+
+    double minY = ecgPoints.reduce((a, b) => a < b ? a : b) - 100;
+    double maxY = ecgPoints.reduce((a, b) => a > b ? a : b) + 100;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(25),
+        border: Border.all(color: AppColors.danger.withOpacity(0.3), width: 1),
+      ),
+      padding: const EdgeInsets.fromLTRB(8, 16, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 8, bottom: 4),
+            child: Text(
+              "ECG  ──────────────────────",
+              style: TextStyle(
+                color: AppColors.danger,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ),
+          Expanded(
+            child: LineChart(
+              LineChartData(
+                minY: minY,
+                maxY: maxY,
+                clipData: const FlClipData.all(),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: true,
+                  horizontalInterval: (maxY - minY) / 4,
+                  verticalInterval: ecgMaxPoints / 5,
+                  getDrawingHorizontalLine: (_) => const FlLine(color: Color(0xFF1A2A1A), strokeWidth: 1),
+                  getDrawingVerticalLine: (_) => const FlLine(color: Color(0xFF1A2A1A), strokeWidth: 1),
+                ),
+                titlesData: const FlTitlesData(
+                  leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                ),
+                borderData: FlBorderData(show: false),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spots,
+                    isCurved: false, // ECG é angular, não curvo
+                    color: AppColors.danger,
+                    barWidth: 1.5,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      color: AppColors.danger.withOpacity(0.05),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildMapWidget() {
     if (!hasGpsSignal) {
       return const Center(
@@ -780,7 +975,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // WIDGET DE PROXIMIDADE (SUBSTITUI A MÉDIA)
   Widget _buildProximityBox() {
     bool isDanger = proximityStatus == "OBSTACULO_PERTO";
     Color iconColor = isDanger 
@@ -810,13 +1004,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
   }
 
   Widget _buildThermalWidget() => imageBytes != null ? Image.memory(imageBytes!, fit: BoxFit.contain, gaplessPlayback: true) : const Center(child: Text("A aguardar vídeo..."));
-  Widget _buildStatCard(String label, String value) => Container(width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 25), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(35)), child: Column(children: [Text(label, style: const TextStyle(color: Colors.white38, fontSize: 11)), Text(value, style: TextStyle(fontSize: 56, fontWeight: FontWeight.w900, color: isPaused ? Colors.white24 : AppColors.primary))]));
   Widget _buildMiniBox(String l, String v, IconData i) => Expanded(child: Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)), child: Row(children: [Icon(i, color: AppColors.primary, size: 20), const SizedBox(width: 12), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(l, style: const TextStyle(color: Colors.white38, fontSize: 11)), Text(v, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))])])));
   Widget _buildGPSStatusBox() => Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20)), child: Row(children: [const Icon(Icons.gps_fixed, color: AppColors.success, size: 18), const SizedBox(width: 15), Text("GPS | Dist: ${distance.toStringAsFixed(0)}m", style: const TextStyle(fontFamily: 'monospace', fontSize: 14, fontWeight: FontWeight.bold))]));
-  Widget _buildLiveChart() {
-    List<double> displayTemps = allTemps.length > 30 ? allTemps.sublist(allTemps.length - 30) : allTemps;
-    return LineChart(LineChartData(gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1)), titlesData: FlTitlesData(leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 40, getTitlesWidget: (v, m) => Text("${v.toInt()}°", style: const TextStyle(fontSize: 10, color: Colors.white38)))), bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 30, getTitlesWidget: (v, m) => Text("${v.toInt()}s", style: const TextStyle(fontSize: 10, color: Colors.white38)))), rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)), topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false))), borderData: FlBorderData(show: false), lineBarsData: [LineChartBarData(spots: displayTemps.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(), isCurved: true, color: AppColors.primary, barWidth: 4, dotData: const FlDotData(show: false), belowBarData: BarAreaData(show: true, color: AppColors.primary.withOpacity(0.1)))]));
-  }
   String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
 }
 
@@ -834,11 +1023,11 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
 
   Future<void> apagarUnica(String id) async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: const Text("Apagar Atividade?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR", style: TextStyle(color: AppColors.danger)))]));
-    if (confirmar == true) { try { await http.delete(Uri.parse('http://172.20.10.6:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
+    if (confirmar == true) { try { await http.delete(Uri.parse('http://172.20.10.4:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
   }
   Future<void> apagarMultiplas() async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: Text("Apagar ${selectedIds.length} atividades?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR TUDO"))]));
-    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://172.20.10.6:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
+    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://172.20.10.4:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
   }
 
   @override
