@@ -11,7 +11,8 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_map/flutter_map.dart'; 
 import 'package:latlong2/latlong.dart'; 
 import 'package:shared_preferences/shared_preferences.dart'; 
-import 'package:mobile_scanner/mobile_scanner.dart'; // NOVO: Para o Leitor de QR Code
+import 'package:mobile_scanner/mobile_scanner.dart';
+
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -315,23 +316,36 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // ABA 0: CONFIGURAÇÕES (NOVA COM LEITOR QR)
       Center(
-        child: ElevatedButton.icon(
-          onPressed: () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
-          },
-          icon: const Icon(Icons.qr_code_scanner, size: 30),
-          label: const Text("Configurar Nova Placa (Wi-Fi)"),
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
-            backgroundColor: AppColors.primary,
-            foregroundColor: Colors.black,
+        child: Padding(
+          padding: const EdgeInsets.all(40),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(height: 40),
+              SizedBox(
+                width: double.infinity,
+                height: 65,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const QrScannerScreen()),
+                  ),
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: const Text("ACEDER À CÂMARA", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.surface,
+                    foregroundColor: AppColors.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    side: const BorderSide(color: AppColors.primary, width: 1),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
       
-      // ABA 1: DASHBOARD
       Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -356,7 +370,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
         ),
       ),
       
-      // ABA 2: HISTÓRICO
       RefreshIndicator(
         onRefresh: buscarHistoricoDoPC,
         child: ActivityLogScreen(activities: activitiesList, onRefresh: buscarHistoricoDoPC),
@@ -1198,87 +1211,109 @@ class ActivityDetailScreen extends StatelessWidget {
   String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
 }
 
-class ActivityData {
-  final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
-  final List<LatLng> route; final double distance;
-  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
+////////////////////////////////////////////////////
+/// 📷 LEITOR DE QR CODE
+////////////////////////////////////////////////////
+
+class QrScannerScreen extends StatefulWidget {
+  const QrScannerScreen({super.key});
+  @override
+  State<QrScannerScreen> createState() => _QrScannerScreenState();
 }
 
-////////////////////////////////////////////////////
-/// 📷 ECRÃ DO LEITOR DE QR CODE (FASE 2)
-////////////////////////////////////////////////////
-class QRScannerScreen extends StatefulWidget {
-  const QRScannerScreen({super.key});
+class _QrScannerScreenState extends State<QrScannerScreen> {
+  MobileScannerController cameraController = MobileScannerController();
+  bool scanned = false;
 
   @override
-  State<QRScannerScreen> createState() => _QRScannerScreenState();
-}
-
-class _QRScannerScreenState extends State<QRScannerScreen> {
-  bool isScanning = true;
+  void dispose() {
+    cameraController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Ler QR Code da Placa"),
+        title: const Text("Ler QR Code"),
         backgroundColor: Colors.transparent,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.flash_on),
+            onPressed: () => cameraController.toggleTorch(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.flip_camera_ios),
+            onPressed: () => cameraController.switchCamera(),
+          ),
+        ],
       ),
       body: Stack(
         children: [
           MobileScanner(
+            controller: cameraController,
             onDetect: (capture) {
-              if (!isScanning) return;
-              
-              final List<Barcode> barcodes = capture.barcodes;
-              for (final barcode in barcodes) {
-                if (barcode.rawValue != null) {
-                  // Parar de ler para não disparar várias vezes
-                  setState(() => isScanning = false); 
-                  
-                  String macAddress = barcode.rawValue!;
-                  print("QR Lido: $macAddress");
-
-                  // Mostra um aviso no ecrã com o MAC lido
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text("MAC Encontrado: $macAddress"),
-                      backgroundColor: AppColors.success,
-                    )
-                  );
-
-                  // NA FASE 3, É AQUI QUE VAMOS ABRIR O ECRÃ PARA INSERIR A PASSWORD DO WIFI!
-                  // Por agora, apenas volta para trás após ler.
-                  Future.delayed(const Duration(seconds: 2), () {
-                    if (mounted) Navigator.pop(context);
-                  });
-                }
+              if (scanned) return;
+              final barcode = capture.barcodes.firstOrNull;
+              if (barcode?.rawValue != null) {
+                setState(() => scanned = true);
+                final valor = barcode!.rawValue!;
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: AppColors.surface,
+                    title: const Text("QR Code Detetado"),
+                    content: SelectableText(
+                      valor,
+                      style: const TextStyle(fontFamily: 'monospace'),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () {
+                          setState(() => scanned = false);
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text("LER OUTRO"),
+                      ),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text("FECHAR"),
+                      ),
+                    ],
+                  ),
+                );
               }
             },
           ),
-          // Design para o utilizador saber onde apontar a câmara
+          // Overlay com guia visual
           Center(
             child: Container(
               width: 250,
               height: 250,
               decoration: BoxDecoration(
-                border: Border.all(color: AppColors.primary, width: 4),
-                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.primary, width: 2),
+                borderRadius: BorderRadius.circular(16),
               ),
             ),
           ),
           const Positioned(
-            bottom: 50,
+            bottom: 40,
             left: 0,
             right: 0,
             child: Text(
-              "Aponte para o QR Code da caixa",
+              "Aponte a câmara para o QR Code",
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(color: Colors.white54, fontSize: 14),
             ),
-          )
+          ),
         ],
       ),
     );
   }
+}
+
+class ActivityData {
+  final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
+  final List<LatLng> route; final double distance;
+  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
 }
