@@ -11,6 +11,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_map/flutter_map.dart'; 
 import 'package:latlong2/latlong.dart'; 
 import 'package:shared_preferences/shared_preferences.dart'; 
+import 'package:mobile_scanner/mobile_scanner.dart'; // NOVO: Para o Leitor de QR Code
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,7 +28,6 @@ class SessionManager {
   static String activityType = "Caminhada";
   static DateTime? startTime; 
   static List<double> temps = [];
-  static List<int> bpms = []; // NOVO
   static double lastLat = 39.3999;
   static double lastLon = -8.2245;
   static List<LatLng> route = [];
@@ -44,12 +44,6 @@ class SessionManager {
     if (tempsJson != null) {
       List<dynamic> decoded = jsonDecode(tempsJson);
       temps = decoded.map((e) => (e as num).toDouble()).toList();
-    }
-
-    String? bpmsJson = prefs.getString('bpms'); // NOVO
-    if (bpmsJson != null) {
-      List<dynamic> decodedBpms = jsonDecode(bpmsJson);
-      bpms = decodedBpms.map((e) => (e as num).toInt()).toList();
     }
     
     String? routeJson = prefs.getString('route');
@@ -68,27 +62,23 @@ class SessionManager {
     activityType = type;
     startTime = DateTime.now();
     temps = [];
-    bpms = []; // NOVO
     route = [];
     distance = 0.0;
     await prefs.setBool('hasActiveSession', true);
     await prefs.setString('activityType', type);
     await prefs.setString('startTime', startTime!.toIso8601String());
     await prefs.setString('temps', '[]');
-    await prefs.setString('bpms', '[]'); // NOVO
     await prefs.setString('route', '[]');
     await prefs.setDouble('distance', 0.0);
   }
 
-  static Future<void> saveProgress(List<double> t, List<int> b, double la, double lo, List<LatLng> r, double d) async { // NOVO PARÂMETRO
+  static Future<void> saveProgress(List<double> t, double la, double lo, List<LatLng> r, double d) async {
     temps = List.from(t);
-    bpms = List.from(b); // NOVO
     lastLat = la;
     lastLon = lo;
     route = List.from(r);
     distance = d;
     await prefs.setString('temps', jsonEncode(temps));
-    await prefs.setString('bpms', jsonEncode(bpms)); // NOVO
     await prefs.setDouble('lastLat', la);
     await prefs.setDouble('lastLon', lo);
     await prefs.setString('route', jsonEncode(route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()));
@@ -99,7 +89,6 @@ class SessionManager {
     hasActiveSession = false;
     startTime = null;
     temps = [];
-    bpms = []; // NOVO
     route = [];
     distance = 0.0;
     await prefs.clear(); 
@@ -268,21 +257,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               }
             }
 
-            List<int> bpmsExtraidos = []; // NOVO
-            var rawBpms = item['bpms'];
-            if (rawBpms != null) {
-              if (rawBpms is List) {
-                bpmsExtraidos = rawBpms.map((e) => (e as num).toInt()).toList();
-              } else if (rawBpms is String) {
-                try {
-                  var decoded = jsonDecode(rawBpms);
-                  if (decoded is List) bpmsExtraidos = decoded.map((e) => (e as num).toInt()).toList();
-                } catch (_) {
-                  bpmsExtraidos = rawBpms.split(',').map((e) => int.tryParse(e) ?? 0).toList();
-                }
-              }
-            }
-
             List<LatLng> routeExtraida = [];
             var rawRoute = item['route'];
             if (rawRoute != null) {
@@ -305,15 +279,11 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               type: item['type'] ?? "Atividade",
               duration: item['duracao_segundos'] ?? 0,
               temperatures: tempsExtraidas,
-              bpms: bpmsExtraidos, // NOVO
               route: routeExtraida,
               distance: distExtraida,
               min: double.tryParse(item['temp_minima']?.toString() ?? "0") ?? 0.0,
               avg: double.tryParse(item['temp_media']?.toString() ?? "0") ?? 0.0,
               max: double.tryParse(item['temp_maxima']?.toString() ?? "0") ?? 0.0,
-              minBpm: int.tryParse(item['bpm_minimo']?.toString() ?? "0") ?? 0, // NOVO
-              avgBpm: int.tryParse(item['bpm_medio']?.toString() ?? "0") ?? 0, // NOVO
-              maxBpm: int.tryParse(item['bpm_maximo']?.toString() ?? "0") ?? 0, // NOVO
             ));
           } catch (e) { print("Erro ao processar item do histórico: $e"); }
         }
@@ -345,8 +315,23 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      const Center(child: Text("Configurações futuras", style: TextStyle(color: Colors.white24, fontSize: 18))),
+      // ABA 0: CONFIGURAÇÕES (NOVA COM LEITOR QR)
+      Center(
+        child: ElevatedButton.icon(
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
+          },
+          icon: const Icon(Icons.qr_code_scanner, size: 30),
+          label: const Text("Configurar Nova Placa (Wi-Fi)"),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.black,
+          ),
+        ),
+      ),
       
+      // ABA 1: DASHBOARD
       Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -371,6 +356,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
         ),
       ),
       
+      // ABA 2: HISTÓRICO
       RefreshIndicator(
         onRefresh: buscarHistoricoDoPC,
         child: ActivityLogScreen(activities: activitiesList, onRefresh: buscarHistoricoDoPC),
@@ -456,7 +442,6 @@ class MonitorScreen extends StatefulWidget {
 class _MonitorScreenState extends State<MonitorScreen> {
   MqttServerClient? client;
   List<double> allTemps = [];
-  List<int> allBpms = []; // NOVO
   double currentTemp = 0;
   
   double lat = 39.3999;
@@ -496,7 +481,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
       SessionManager.start(widget.atividade);
     } else {
       allTemps = SessionManager.temps;
-      allBpms = SessionManager.bpms; // NOVO
       lat = SessionManager.lastLat;
       lon = SessionManager.lastLon;
       route = SessionManager.route;
@@ -511,7 +495,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && !isPaused) {
         setState(() { seconds = SessionManager.elapsedSeconds; });
-        SessionManager.saveProgress(allTemps, allBpms, lat, lon, route, distance); // NOVO PARÂMETRO
+        SessionManager.saveProgress(allTemps, lat, lon, route, distance);
       }
     });
 
@@ -614,10 +598,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
           } else if (topic == 'heartbox/heart/bpm') {
             int newBpm = int.tryParse(payload) ?? 0;
             currentBpm = newBpm;
-            if (newBpm > 0) {
-              _triggerHeartBlink();
-              allBpms.add(currentBpm); // NOVO
-            }
+            if (newBpm > 0) _triggerHeartBlink();
           }
         });
       });
@@ -745,7 +726,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
             "type": _nameCtrl.text, 
             "duration": seconds, 
             "temperatures": allTemps,
-            "bpms": allBpms, // NOVO
             "distance": distance,
             "route": route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()
           }),
@@ -1123,17 +1103,13 @@ class ActivityDetailScreen extends StatelessWidget {
     if (activity.route.length >= 2) routeBounds = LatLngBounds.fromPoints(activity.route);
 
     return DefaultTabController(
-      length: 3, // NOVO
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: Text(activity.type),
           bottom: const TabBar(
             indicatorColor: AppColors.primary,
-            tabs: [
-              Tab(icon: Icon(Icons.thermostat), text: "Temperatura"), 
-              Tab(icon: Icon(Icons.favorite), text: "BPM"), // NOVO
-              Tab(icon: Icon(Icons.map_outlined), text: "Percurso")
-            ],
+            tabs: [Tab(icon: Icon(Icons.thermostat), text: "Temperatura"), Tab(icon: Icon(Icons.map_outlined), text: "Percurso")],
           ),
         ),
         body: TabBarView(
@@ -1186,42 +1162,6 @@ class ActivityDetailScreen extends StatelessWidget {
                 const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10))),
               ],
             ),
-            // NOVO (COLUNA DO BPM)
-            Column(
-              children: [
-                Padding(padding: const EdgeInsets.all(20), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_detBox("MIN", "${activity.minBpm}"), _detBox("AVG", "${activity.avgBpm}"), _detBox("MAX", "${activity.maxBpm}")])),
-                const Divider(color: Colors.white10),
-                Expanded(
-                  child: Container(
-                    margin: const EdgeInsets.all(15), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)), clipBehavior: Clip.antiAlias,
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Container(
-                        width: (activity.bpms.length * spacing) < MediaQuery.of(context).size.width ? MediaQuery.of(context).size.width : (activity.bpms.length * spacing),
-                        padding: const EdgeInsets.fromLTRB(10, 40, 30, 20),
-                        child: activity.bpms.isEmpty
-                          ? const Center(child: Text("Sem dados de BPM", style: TextStyle(color: Colors.white38)))
-                          : LineChart(
-                              LineChartData(
-                                minX: 0, maxX: activity.bpms.length > 1 ? activity.bpms.length.toDouble() - 1 : 1,
-                                minY: (activity.minBpm - 10).clamp(0, 250).toDouble(), maxY: (activity.maxBpm + 10).clamp(0, 250).toDouble(),
-                                gridData: FlGridData(show: true, drawVerticalLine: true, getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1), getDrawingVerticalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1)),
-                                titlesData: FlTitlesData(
-                                  leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 45, getTitlesWidget: (v, m) => Text("${v.toInt()}", style: const TextStyle(fontSize: 10, color: Colors.white38)))),
-                                  bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)), topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                ),
-                                borderData: FlBorderData(show: false),
-                                lineBarsData: [LineChartBarData(spots: activity.bpms.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value.toDouble())).toList(), isCurved: true, color: AppColors.danger, barWidth: 5, dotData: const FlDotData(show: false), belowBarData: BarAreaData(show: true, color: AppColors.danger.withOpacity(0.1)))]
-                              ),
-                            ),
-                      ),
-                    ),
-                  ),
-                ),
-                const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10))),
-              ],
-            ),
             Column(
               children: [
                 Expanded(
@@ -1261,6 +1201,84 @@ class ActivityDetailScreen extends StatelessWidget {
 class ActivityData {
   final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
   final List<LatLng> route; final double distance;
-  final List<int> bpms; final int minBpm, avgBpm, maxBpm; // NOVO
-  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0, this.bpms = const [], this.minBpm = 0, this.avgBpm = 0, this.maxBpm = 0}); // NOVO
+  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
+}
+
+////////////////////////////////////////////////////
+/// 📷 ECRÃ DO LEITOR DE QR CODE (FASE 2)
+////////////////////////////////////////////////////
+class QRScannerScreen extends StatefulWidget {
+  const QRScannerScreen({super.key});
+
+  @override
+  State<QRScannerScreen> createState() => _QRScannerScreenState();
+}
+
+class _QRScannerScreenState extends State<QRScannerScreen> {
+  bool isScanning = true;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Ler QR Code da Placa"),
+        backgroundColor: Colors.transparent,
+      ),
+      body: Stack(
+        children: [
+          MobileScanner(
+            onDetect: (capture) {
+              if (!isScanning) return;
+              
+              final List<Barcode> barcodes = capture.barcodes;
+              for (final barcode in barcodes) {
+                if (barcode.rawValue != null) {
+                  // Parar de ler para não disparar várias vezes
+                  setState(() => isScanning = false); 
+                  
+                  String macAddress = barcode.rawValue!;
+                  print("QR Lido: $macAddress");
+
+                  // Mostra um aviso no ecrã com o MAC lido
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text("MAC Encontrado: $macAddress"),
+                      backgroundColor: AppColors.success,
+                    )
+                  );
+
+                  // NA FASE 3, É AQUI QUE VAMOS ABRIR O ECRÃ PARA INSERIR A PASSWORD DO WIFI!
+                  // Por agora, apenas volta para trás após ler.
+                  Future.delayed(const Duration(seconds: 2), () {
+                    if (mounted) Navigator.pop(context);
+                  });
+                }
+              }
+            },
+          ),
+          // Design para o utilizador saber onde apontar a câmara
+          Center(
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.primary, width: 4),
+                borderRadius: BorderRadius.circular(20),
+              ),
+            ),
+          ),
+          const Positioned(
+            bottom: 50,
+            left: 0,
+            right: 0,
+            child: Text(
+              "Aponte para o QR Code da caixa",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+          )
+        ],
+      ),
+    );
+  }
 }
