@@ -1281,9 +1281,10 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   final TextEditingController _ipController = TextEditingController(text: "172.20.10.4");
   
   bool isSending = false;
+  bool _obscurePassword = true; // Controla se a pass está oculta
   String statusMessage = "Preencha os dados e clique em Enviar";
 
-  // UUIDs de Configuração (Compatíveis com a S3 e a CAM)
+  // UUIDs de Configuração (Conforme definido no main.dart)[cite: 1]
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
   final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
@@ -1296,19 +1297,18 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     });
 
     try {
-      // Começa o rastreio Bluetooth
+      // Inicia o varrimento Bluetooth[cite: 1]
       FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
 
       bool found = false;
       
       var subscription = FlutterBluePlus.scanResults.listen((results) async {
         for (ScanResult r in results) {
-          // Validação flexível: Procura pelo nome exato que veio no QR Code
           if (r.device.advName == widget.targetName || r.advertisementData.advName == widget.targetName) {
             found = true;
             FlutterBluePlus.stopScan();
 
-            setState(() => statusMessage = "Placa encontrada! A conectar via BLE...");
+            setState(() => statusMessage = "Placa encontrada! A conectar...");
             
             await r.device.connect();
             setState(() => statusMessage = "Conectado. A injetar credenciais...");
@@ -1317,21 +1317,18 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             for (var service in services) {
               if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
                 for (var c in service.characteristics) {
-                  // Injeta SSID
+                  // Escreve SSID[cite: 1]
                   if (c.uuid.str.toLowerCase() == UUID_SSID) {
                     await c.write(utf8.encode(_ssidController.text));
                   }
-                  // Injeta Password
+                  // Escreve Password[cite: 1]
                   if (c.uuid.str.toLowerCase() == UUID_PASS) {
                     await c.write(utf8.encode(_passController.text));
                   }
-                  // Injeta IP do Servidor
+                  // Escreve IP do Servidor[cite: 1]
                   if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                    // Adiciona a porta 8080 caso o utilizador não tenha escrito
                     String ipEnvio = _ipController.text;
-                    if (!ipEnvio.contains(':')) {
-                      ipEnvio += ":8080";
-                    }
+                    if (!ipEnvio.contains(':')) ipEnvio += ":8080";
                     await c.write(utf8.encode(ipEnvio));
                   }
                 }
@@ -1342,15 +1339,13 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             
             if (mounted) {
               setState(() {
-                statusMessage = "✅ Configuração enviada! A placa vai reiniciar.";
+                statusMessage = "✅ Configuração enviada!";
                 isSending = false;
               });
-              
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Credenciais aplicadas!"), backgroundColor: AppColors.success));
-              
-              Future.delayed(const Duration(seconds: 2), () {
-                Navigator.pop(context);
-              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Credenciais aplicadas!"), backgroundColor: AppColors.success)
+              );
+              Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
             }
           }
         }
@@ -1362,14 +1357,13 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         if (mounted) {
           setState(() {
             isSending = false;
-            statusMessage = "❌ Dispositivo não encontrado. Certifique-se de que o BLE está ativo.";
+            statusMessage = "❌ Dispositivo não encontrado.";
           });
         }
       }
       subscription.cancel();
 
     } catch (e) {
-      print("Erro BLE: $e");
       if (mounted) {
         setState(() {
           isSending = false;
@@ -1388,23 +1382,52 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Alvo de Configuração: ${widget.targetName}", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+            Text("Alvo: ${widget.targetName}", 
+                 style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
+            // Campo SSID
             TextField(
               controller: _ssidController,
-              decoration: InputDecoration(labelText: "Nome da Rede Wi-Fi (SSID)", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))),
+              decoration: InputDecoration(
+                labelText: "Nome da Rede Wi-Fi (SSID)", 
+                filled: true, 
+                fillColor: AppColors.surface, 
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
+              ),
             ),
             const SizedBox(height: 15),
+            
+            // Campo Password com Ícone de Olho
             TextField(
               controller: _passController,
-              obscureText: true,
-              decoration: InputDecoration(labelText: "Password do Wi-Fi", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))),
+              obscureText: _obscurePassword,
+              decoration: InputDecoration(
+                labelText: "Password do Wi-Fi", 
+                filled: true, 
+                fillColor: AppColors.surface, 
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                    color: Colors.white60,
+                  ),
+                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                ),
+              ),
             ),
+            
             const SizedBox(height: 15),
+            
+            // Campo IP
             TextField(
               controller: _ipController,
-              decoration: InputDecoration(labelText: "IP do Computador", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))),
+              decoration: InputDecoration(
+                labelText: "IP do Computador", 
+                filled: true, 
+                fillColor: AppColors.surface, 
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
+              ),
             ),
             
             const SizedBox(height: 40),
@@ -1414,7 +1437,11 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
               height: 60,
               child: ElevatedButton(
                 onPressed: isSending ? null : _enviarDadosBLE,
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary, 
+                  foregroundColor: Colors.black, 
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                ),
                 child: isSending 
                     ? const CircularProgressIndicator(color: Colors.black) 
                     : const Text("ENVIAR PARA A PLACA", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
@@ -1422,7 +1449,13 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             ),
             
             const SizedBox(height: 30),
-            Center(child: Text(statusMessage, textAlign: TextAlign.center, style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70))),
+            Center(
+              child: Text(
+                statusMessage, 
+                textAlign: TextAlign.center, 
+                style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70)
+              )
+            ),
           ],
         ),
       ),
