@@ -11,8 +11,8 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_map/flutter_map.dart'; 
 import 'package:latlong2/latlong.dart'; 
 import 'package:shared_preferences/shared_preferences.dart'; 
-import 'package:mobile_scanner/mobile_scanner.dart';
-
+import 'package:mobile_scanner/mobile_scanner.dart'; // Para o Leitor de QR Code
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // NOVO: Para o Bluetooth
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -316,36 +316,23 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
+      // ABA 0: CONFIGURAÇÕES (NOVA COM LEITOR QR)
       Center(
-        child: Padding(
-          padding: const EdgeInsets.all(40),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const SizedBox(height: 40),
-              SizedBox(
-                width: double.infinity,
-                height: 65,
-                child: ElevatedButton.icon(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const QrScannerScreen()),
-                  ),
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text("ACEDER À CÂMARA", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.surface,
-                    foregroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    side: const BorderSide(color: AppColors.primary, width: 1),
-                  ),
-                ),
-              ),
-            ],
+        child: ElevatedButton.icon(
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
+          },
+          icon: const Icon(Icons.qr_code_scanner, size: 30),
+          label: const Text("Configurar Nova Placa (Wi-Fi)"),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.black,
           ),
         ),
       ),
       
+      // ABA 1: DASHBOARD
       Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -370,6 +357,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
         ),
       ),
       
+      // ABA 2: HISTÓRICO
       RefreshIndicator(
         onRefresh: buscarHistoricoDoPC,
         child: ActivityLogScreen(activities: activitiesList, onRefresh: buscarHistoricoDoPC),
@@ -480,7 +468,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
-  // --- NOVAS VARIÁVEIS ECG / BPM ---
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -528,7 +515,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     super.dispose();
   }
 
-  // Dispara o piscar do coração quando recebe BPM novo
   void _triggerHeartBlink() {
     heartBlinkTimer?.cancel();
     setState(() => heartBlinkState = true);
@@ -547,7 +533,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
-      // NOVOS TÓPICOS ECG E BPM
       client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
       client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
@@ -602,7 +587,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
               }
             }
           } else if (topic == 'heartbox/heart/ecg') {
-            // ACUMULA PONTOS ECG PARA O GRÁFICO (janela deslizante)
             double val = double.tryParse(payload) ?? 0.0;
             ecgPoints.add(val);
             if (ecgPoints.length > ecgMaxPoints) {
@@ -776,7 +760,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 if (showMap || showThermal)
                   Container(height: 250, width: double.infinity, margin: const EdgeInsets.only(bottom: 15), decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)), clipBehavior: Clip.antiAlias, child: showMap ? _buildMapWidget() : _buildThermalWidget()),
 
-                // SUBSTITUÍDO: card de temperatura + card de batimentos
                 _buildTempAndBpmCards(),
 
                 const SizedBox(height: 15),
@@ -789,7 +772,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 _buildGPSStatusBox(),
                 const SizedBox(height: 20),
 
-                // SUBSTITUÍDO: gráfico ECG em vez do gráfico de temperatura
                 SizedBox(height: 250, child: _buildEcgChart()),
 
                 const SizedBox(height: 25),
@@ -808,11 +790,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // NOVO: Dois cards lado a lado — Temperatura e Batimentos
   Widget _buildTempAndBpmCards() {
     return Row(
       children: [
-        // Card Temperatura
         Expanded(
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
@@ -838,7 +818,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
           ),
         ),
         const SizedBox(width: 15),
-        // Card Batimentos
         Expanded(
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
@@ -854,7 +833,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // Coração a piscar vermelho quando recebe novos valores
                     AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
                       child: Icon(
@@ -892,7 +870,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // NOVO: Gráfico ECG tipo eletrocardiograma
   Widget _buildEcgChart() {
     if (ecgPoints.isEmpty) {
       return Container(
@@ -963,7 +940,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 lineBarsData: [
                   LineChartBarData(
                     spots: spots,
-                    isCurved: false, // ECG é angular, não curvo
+                    isCurved: false, 
                     color: AppColors.danger,
                     barWidth: 1.5,
                     dotData: const FlDotData(show: false),
@@ -1086,9 +1063,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   }
 }
 
-////////////////////////////////////////////////////
-/// 📊 DETALHES (TABS + GRÁFICO DINÂMICO REDUZIDO + MAPA ESTÁTICO)
-////////////////////////////////////////////////////
 class ActivityDetailScreen extends StatelessWidget {
   final ActivityData activity;
   const ActivityDetailScreen({super.key, required this.activity});
@@ -1211,109 +1185,246 @@ class ActivityDetailScreen extends StatelessWidget {
   String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
 }
 
-////////////////////////////////////////////////////
-/// 📷 LEITOR DE QR CODE
-////////////////////////////////////////////////////
-
-class QrScannerScreen extends StatefulWidget {
-  const QrScannerScreen({super.key});
-  @override
-  State<QrScannerScreen> createState() => _QrScannerScreenState();
+class ActivityData {
+  final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
+  final List<LatLng> route; final double distance;
+  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
 }
 
-class _QrScannerScreenState extends State<QrScannerScreen> {
-  MobileScannerController cameraController = MobileScannerController();
-  bool scanned = false;
+////////////////////////////////////////////////////
+/// 📷 ECRÃ DO LEITOR DE QR CODE (FASE 2)
+////////////////////////////////////////////////////
+class QRScannerScreen extends StatefulWidget {
+  const QRScannerScreen({super.key});
 
   @override
-  void dispose() {
-    cameraController.dispose();
-    super.dispose();
-  }
+  State<QRScannerScreen> createState() => _QRScannerScreenState();
+}
+
+class _QRScannerScreenState extends State<QRScannerScreen> {
+  bool isScanning = true;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Ler QR Code"),
+        title: const Text("Ler QR Code da Placa"),
         backgroundColor: Colors.transparent,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.flash_on),
-            onPressed: () => cameraController.toggleTorch(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.flip_camera_ios),
-            onPressed: () => cameraController.switchCamera(),
-          ),
-        ],
       ),
       body: Stack(
         children: [
           MobileScanner(
-            controller: cameraController,
             onDetect: (capture) {
-              if (scanned) return;
-              final barcode = capture.barcodes.firstOrNull;
-              if (barcode?.rawValue != null) {
-                setState(() => scanned = true);
-                final valor = barcode!.rawValue!;
-                showDialog(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    backgroundColor: AppColors.surface,
-                    title: const Text("QR Code Detetado"),
-                    content: SelectableText(
-                      valor,
-                      style: const TextStyle(fontFamily: 'monospace'),
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () {
-                          setState(() => scanned = false);
-                          Navigator.pop(ctx);
-                        },
-                        child: const Text("LER OUTRO"),
-                      ),
-                      ElevatedButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text("FECHAR"),
-                      ),
-                    ],
-                  ),
-                );
+              if (!isScanning) return;
+              
+              final List<Barcode> barcodes = capture.barcodes;
+              for (final barcode in barcodes) {
+                if (barcode.rawValue != null) {
+                  setState(() => isScanning = false); 
+                  
+                  String macAddress = barcode.rawValue!;
+                  print("QR Lido: $macAddress");
+
+                  // Passamos o MAC Address para a nova página do WiFi! (FASE 3)
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => WifiConfigScreen(macAddress: macAddress)),
+                  );
+                }
               }
             },
           ),
-          // Overlay com guia visual
           Center(
             child: Container(
               width: 250,
               height: 250,
               decoration: BoxDecoration(
-                border: Border.all(color: AppColors.primary, width: 2),
-                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.primary, width: 4),
+                borderRadius: BorderRadius.circular(20),
               ),
             ),
           ),
           const Positioned(
-            bottom: 40,
+            bottom: 50,
             left: 0,
             right: 0,
             child: Text(
-              "Aponte a câmara para o QR Code",
+              "Aponte para o QR Code da caixa",
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white54, fontSize: 14),
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
             ),
-          ),
+          )
         ],
       ),
     );
   }
 }
 
-class ActivityData {
-  final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
-  final List<LatLng> route; final double distance;
-  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
+////////////////////////////////////////////////////
+/// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
+////////////////////////////////////////////////////
+class WifiConfigScreen extends StatefulWidget {
+  final String macAddress;
+  const WifiConfigScreen({super.key, required this.macAddress});
+
+  @override
+  State<WifiConfigScreen> createState() => _WifiConfigScreenState();
+}
+
+class _WifiConfigScreenState extends State<WifiConfigScreen> {
+  final TextEditingController _ssidController = TextEditingController();
+  final TextEditingController _passController = TextEditingController();
+  final TextEditingController _ipController = TextEditingController(text: "172.20.10.4");
+  
+  bool isSending = false;
+  String statusMessage = "Preencha os dados e clique em Enviar";
+
+  // UUIDs que definimos no código da ESP32
+  final String SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+  final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
+  final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
+  final String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
+
+  Future<void> _enviarDadosBLE() async {
+    setState(() {
+      isSending = true;
+      statusMessage = "A procurar a placa ${widget.macAddress} ...";
+    });
+
+    try {
+      // 1. Começa a procurar dispositivos Bluetooth
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+
+      bool found = false;
+      
+      // Fica à escuta dos resultados
+      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        for (ScanResult r in results) {
+          // Verifica se o MAC é igual ou se o nome da placa é o nosso HEARTBOX-S3
+          if (r.device.remoteId.str == widget.macAddress || r.device.advName == "HEARTBOX-S3" || r.advertisementData.advName == "HEARTBOX-S3") {
+            found = true;
+            FlutterBluePlus.stopScan();
+
+            setState(() => statusMessage = "Placa encontrada! A conectar...");
+            
+            // 2. Conecta à placa
+            await r.device.connect();
+            setState(() => statusMessage = "Conectado. A enviar credenciais...");
+
+            // 3. Descobre os serviços
+            List<BluetoothService> services = await r.device.discoverServices();
+            for (var service in services) {
+              if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
+                for (var c in service.characteristics) {
+                  // Envia SSID
+                  if (c.uuid.str.toLowerCase() == UUID_SSID) {
+                    await c.write(utf8.encode(_ssidController.text));
+                  }
+                  // Envia Pass
+                  if (c.uuid.str.toLowerCase() == UUID_PASS) {
+                    await c.write(utf8.encode(_passController.text));
+                  }
+                  // Envia IP
+                  if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
+                    await c.write(utf8.encode(_ipController.text));
+                  }
+                }
+              }
+            }
+
+            // 4. Desconecta e festeja
+            await r.device.disconnect();
+            
+            if (mounted) {
+              setState(() {
+                statusMessage = "✅ Tudo enviado com sucesso! A placa vai reiniciar.";
+                isSending = false;
+              });
+              
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Credenciais enviadas com sucesso!"), backgroundColor: AppColors.success));
+              
+              // Volta ao Menu Inicial após 2 segundos
+              Future.delayed(const Duration(seconds: 2), () {
+                Navigator.pop(context);
+              });
+            }
+          }
+        }
+      });
+
+      // Pára o scan após os 10s se não encontrar
+      await Future.delayed(const Duration(seconds: 10));
+      if (!found) {
+        FlutterBluePlus.stopScan();
+        if (mounted) {
+          setState(() {
+            isSending = false;
+            statusMessage = "❌ Placa não encontrada. Ligue a placa e tente novamente.";
+          });
+        }
+      }
+      subscription.cancel();
+
+    } catch (e) {
+      print("Erro no BLE: $e");
+      if (mounted) {
+        setState(() {
+          isSending = false;
+          statusMessage = "❌ Ocorreu um erro no Bluetooth.";
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Configurar Wi-Fi"), backgroundColor: Colors.transparent),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(30),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Placa detetada: ${widget.macAddress}", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 30),
+            
+            // Formulário
+            TextField(
+              controller: _ssidController,
+              decoration: InputDecoration(labelText: "Nome da Rede Wi-Fi (SSID)", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))),
+            ),
+            const SizedBox(height: 15),
+            TextField(
+              controller: _passController,
+              obscureText: true,
+              decoration: InputDecoration(labelText: "Password do Wi-Fi", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))),
+            ),
+            const SizedBox(height: 15),
+            TextField(
+              controller: _ipController,
+              decoration: InputDecoration(labelText: "IP do Computador", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))),
+            ),
+            
+            const SizedBox(height: 40),
+            
+            // Botão de Envio
+            SizedBox(
+              width: double.infinity,
+              height: 60,
+              child: ElevatedButton(
+                onPressed: isSending ? null : _enviarDadosBLE,
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                child: isSending 
+                    ? const CircularProgressIndicator(color: Colors.black) 
+                    : const Text("ENVIAR PARA A PLACA", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ),
+            ),
+            
+            const SizedBox(height: 30),
+            Center(child: Text(statusMessage, textAlign: TextAlign.center, style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70))),
+          ],
+        ),
+      ),
+    );
+  }
 }
