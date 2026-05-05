@@ -283,6 +283,10 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               min: double.tryParse(item['temp_minima']?.toString() ?? "0") ?? 0.0,
               avg: double.tryParse(item['temp_media']?.toString() ?? "0") ?? 0.0,
               max: double.tryParse(item['temp_maxima']?.toString() ?? "0") ?? 0.0,
+              // LEITURA DOS BPMs
+              minBpm: double.tryParse(item['bpm_minima']?.toString() ?? "0") ?? 0.0,
+              avgBpm: double.tryParse(item['bpm_media']?.toString() ?? "0") ?? 0.0,
+              maxBpm: double.tryParse(item['bpm_maxima']?.toString() ?? "0") ?? 0.0,
             ));
           } catch (e) { print("Erro ao processar item do histórico: $e"); }
         }
@@ -1023,11 +1027,11 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
 
   Future<void> apagarUnica(String id) async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: const Text("Apagar Atividade?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR", style: TextStyle(color: AppColors.danger)))]));
-    if (confirmar == true) { try { await http.post(Uri.parse('http://172.20.10.4:1880/apagar-atividade'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
+    if (confirmar == true) { try { await http.delete(Uri.parse('http://172.20.10.4:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
   }
   Future<void> apagarMultiplas() async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: Text("Apagar ${selectedIds.length} atividades?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR TUDO"))]));
-    if (confirmar == true) { for (var id in selectedIds) { try { await http.post(Uri.parse('http://172.20.10.4:1880/apagar-atividade'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
+    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://172.20.10.4:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
   }
 
   @override
@@ -1056,15 +1060,13 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   }
 }
 
-////////////////////////////////////////////////////
-/// 📊 DETALHES (TABS + GRÁFICO DINÂMICO REDUZIDO + MAPA ESTÁTICO)
-////////////////////////////////////////////////////
 class ActivityDetailScreen extends StatelessWidget {
   final ActivityData activity;
   const ActivityDetailScreen({super.key, required this.activity});
-  
+
   @override
   Widget build(BuildContext context) {
+    // --- Lógica de Largura Dinâmica do Gráfico de Temperatura ---
     int totalSecs = activity.temperatures.length;
     double intervalX = 10.0;
     
@@ -1080,32 +1082,57 @@ class ActivityDetailScreen extends StatelessWidget {
     if (totalSecs > 3600) spacing = 1.0;
 
     double dynamicWidth = (totalSecs * spacing);
-    if (dynamicWidth < MediaQuery.of(context).size.width) dynamicWidth = MediaQuery.of(context).size.width;
+    if (dynamicWidth < MediaQuery.of(context).size.width) {
+      dynamicWidth = MediaQuery.of(context).size.width;
+    }
 
+    // --- Lógica de Enquadramento do Mapa ---
     LatLngBounds? routeBounds;
-    if (activity.route.length >= 2) routeBounds = LatLngBounds.fromPoints(activity.route);
+    if (activity.route.length >= 2) {
+      routeBounds = LatLngBounds.fromPoints(activity.route);
+    }
 
     return DefaultTabController(
-      length: 2,
+      length: 3, // Agora são 3 abas
       child: Scaffold(
         appBar: AppBar(
           title: Text(activity.type),
           bottom: const TabBar(
             indicatorColor: AppColors.primary,
-            tabs: [Tab(icon: Icon(Icons.thermostat), text: "Temperatura"), Tab(icon: Icon(Icons.map_outlined), text: "Percurso")],
+            tabs: [
+              Tab(icon: Icon(Icons.thermostat), text: "Temp."),
+              Tab(icon: Icon(Icons.favorite_rounded), text: "BPM"),
+              Tab(icon: Icon(Icons.map_outlined), text: "Percurso"),
+            ],
           ),
         ),
         body: TabBarView(
           physics: const NeverScrollableScrollPhysics(),
           children: [
+            // ==========================================
+            // ABA 1: TEMPERATURA (GRÁFICO)
+            // ==========================================
             Column(
               children: [
-                Padding(padding: const EdgeInsets.all(20), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_detBox("MIN", "${activity.min.toStringAsFixed(1)}°"), _detBox("AVG", "${activity.avg.toStringAsFixed(1)}°"), _detBox("MAX", "${activity.max.toStringAsFixed(1)}°")])),
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _detBox("MIN", "${activity.min.toStringAsFixed(1)}°"),
+                      _detBox("AVG", "${activity.avg.toStringAsFixed(1)}°"),
+                      _detBox("MAX", "${activity.max.toStringAsFixed(1)}°"),
+                    ],
+                  ),
+                ),
                 const Divider(color: Colors.white10),
                 Expanded(
                   child: Container(
                     margin: const EdgeInsets.all(15),
-                    decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(25),
+                    ),
                     clipBehavior: Clip.antiAlias,
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
@@ -1115,58 +1142,171 @@ class ActivityDetailScreen extends StatelessWidget {
                         child: activity.temperatures.isEmpty 
                           ? const Center(child: Text("Gráfico não disponível"))
                           : LineChart(
-                            LineChartData(
-                              minX: 0, maxX: activity.temperatures.length > 1 ? activity.temperatures.length.toDouble() - 1 : 1,
-                              minY: (activity.min - 3).clamp(0, 100), maxY: (activity.max + 3).clamp(0, 100),
-                              gridData: FlGridData(show: true, drawVerticalLine: true, getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1), getDrawingVerticalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1)),
-                              titlesData: FlTitlesData(
-                                leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 45, getTitlesWidget: (v, m) => Text("${v.toInt()}°", style: const TextStyle(fontSize: 10, color: Colors.white38)))),
-                                bottomTitles: AxisTitles(sideTitles: SideTitles(
-                                  showTitles: true, reservedSize: 30, interval: intervalX, 
-                                  getTitlesWidget: (v, m) {
-                                    int s = v.toInt();
-                                    if (s == 0) return const Text("0s", style: TextStyle(fontSize: 10, color: Colors.white38));
-                                    if (s < 60) return Text("${s}s", style: const TextStyle(fontSize: 10, color: Colors.white38));
-                                    if (s < 3600) return Text("${s ~/ 60}m", style: const TextStyle(fontSize: 10, color: Colors.white38));
-                                    return Text("${s ~/ 3600}h", style: const TextStyle(fontSize: 10, color: Colors.white38));
-                                  }
-                                )),
-                                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                              LineChartData(
+                                minX: 0,
+                                maxX: activity.temperatures.length > 1 
+                                    ? activity.temperatures.length.toDouble() - 1 
+                                    : 1,
+                                minY: (activity.min - 3).clamp(0, 100),
+                                maxY: (activity.max + 3).clamp(0, 100),
+                                gridData: FlGridData(
+                                  show: true,
+                                  drawVerticalLine: true,
+                                  getDrawingHorizontalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1),
+                                  getDrawingVerticalLine: (v) => const FlLine(color: Colors.white10, strokeWidth: 1),
+                                ),
+                                titlesData: FlTitlesData(
+                                  leftTitles: AxisTitles(
+                                    sideTitles: SideTitles(
+                                      showTitles: true,
+                                      reservedSize: 45,
+                                      getTitlesWidget: (v, m) => Text("${v.toInt()}°", style: const TextStyle(fontSize: 10, color: Colors.white38)),
+                                    ),
+                                  ),
+                                  bottomTitles: AxisTitles(
+                                    sideTitles: SideTitles(
+                                      showTitles: true,
+                                      reservedSize: 30,
+                                      interval: intervalX, 
+                                      getTitlesWidget: (v, m) {
+                                        int s = v.toInt();
+                                        if (s == 0) return const Text("0s", style: TextStyle(fontSize: 10, color: Colors.white38));
+                                        if (s < 60) return Text("${s}s", style: const TextStyle(fontSize: 10, color: Colors.white38));
+                                        if (s < 3600) return Text("${s ~/ 60}m", style: const TextStyle(fontSize: 10, color: Colors.white38));
+                                        return Text("${s ~/ 3600}h", style: const TextStyle(fontSize: 10, color: Colors.white38));
+                                      }
+                                    ),
+                                  ),
+                                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                ),
+                                borderData: FlBorderData(show: false),
+                                lineBarsData: [
+                                  LineChartBarData(
+                                    spots: activity.temperatures.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(),
+                                    isCurved: true,
+                                    color: AppColors.primary,
+                                    barWidth: 5,
+                                    dotData: const FlDotData(show: false),
+                                    belowBarData: BarAreaData(show: true, color: AppColors.primary.withOpacity(0.1)),
+                                  )
+                                ],
                               ),
-                              borderData: FlBorderData(show: false),
-                              lineBarsData: [LineChartBarData(spots: activity.temperatures.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(), isCurved: true, color: AppColors.primary, barWidth: 5, dotData: const FlDotData(show: false), belowBarData: BarAreaData(show: true, color: AppColors.primary.withOpacity(0.1)))]
                             ),
-                          ),
                       ),
                     ),
                   ),
                 ),
-                const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10))),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 15),
+                  child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10)),
+                ),
               ],
             ),
+
+            // ==========================================
+            // ABA 2: BPM (ESTATÍSTICAS CARDÍACAS)
+            // ==========================================
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.favorite_rounded, color: AppColors.danger, size: 70),
+                const SizedBox(height: 10),
+                const Text(
+                  "RESUMO CARDÍACO",
+                  style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5, color: Colors.white38, fontSize: 12),
+                ),
+                const SizedBox(height: 40),
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 25),
+                  padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(35),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _detBoxBpm("MÍNIMO", "${activity.minBpm.toInt()}", AppColors.success),
+                      _detBoxBpm("MÉDIO", "${activity.avgBpm.toInt()}", AppColors.primary),
+                      _detBoxBpm("MÁXIMO", "${activity.maxBpm.toInt()}", AppColors.danger),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 30),
+                Text(
+                  "Duração total: ${_formatTime(activity.duration)}",
+                  style: const TextStyle(color: Colors.white24, fontSize: 14),
+                )
+              ],
+            ),
+
+            // ==========================================
+            // ABA 3: PERCURSO (MAPA)
+            // ==========================================
             Column(
               children: [
                 Expanded(
                   child: Container(
                     margin: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)),
+                    decoration: BoxDecoration(
+                      color: AppColors.background,
+                      borderRadius: BorderRadius.circular(25),
+                      border: Border.all(color: Colors.white10),
+                    ),
                     clipBehavior: Clip.antiAlias,
                     child: activity.route.isEmpty 
                       ? const Center(child: Text("Sem percurso GPS gravado", style: TextStyle(color: Colors.white38)))
                       : FlutterMap(
-                          options: MapOptions(initialCenter: activity.route.first, initialZoom: 15.0, initialCameraFit: routeBounds != null ? CameraFit.bounds(bounds: routeBounds, padding: const EdgeInsets.all(50)) : null, interactionOptions: const InteractionOptions(flags: InteractiveFlag.none)),
+                          options: MapOptions(
+                            initialCenter: activity.route.first,
+                            initialZoom: 15.0,
+                            initialCameraFit: routeBounds != null 
+                                ? CameraFit.bounds(bounds: routeBounds, padding: const EdgeInsets.all(50)) 
+                                : null,
+                            interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+                          ),
                           children: [
-                            PolylineLayer(polylines: [Polyline(points: activity.route, color: AppColors.danger, strokeWidth: 6, isDotted: false)]),
-                            MarkerLayer(markers: [
-                              Marker(point: activity.route.first, width: 14, height: 14, child: Container(decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle, border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2))))),
-                              Marker(point: activity.route.last, width: 14, height: 14, child: Container(decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle, border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2))))),
-                            ]),
+                            TileLayer(
+                              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                              userAgentPackageName: 'com.mobile.heartbox',
+                            ),
+                            PolylineLayer(
+                              polylines: [
+                                Polyline(points: activity.route, color: AppColors.danger, strokeWidth: 6, isDotted: false),
+                              ],
+                            ),
+                            MarkerLayer(
+                              markers: [
+                                Marker(
+                                  point: activity.route.first,
+                                  width: 14,
+                                  height: 14,
+                                  child: Container(decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle, border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2)))),
+                                ),
+                                Marker(
+                                  point: activity.route.last,
+                                  width: 14,
+                                  height: 14,
+                                  child: Container(decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle, border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2)))),
+                                ),
+                              ],
+                            ),
                           ],
                         ),
                   ),
                 ),
-                Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_summaryBox("TEMPO", _formatTime(activity.duration), Icons.timer_outlined), _summaryBox("DISTÂNCIA", "${activity.distance.toStringAsFixed(0)}m", Icons.directions_walk), _summaryBox("MÉDIA", "${activity.avg.toStringAsFixed(1)}°C", Icons.analytics_outlined)])),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _summaryBox("TEMPO", _formatTime(activity.duration), Icons.timer_outlined),
+                      _summaryBox("DISTÂNCIA", "${activity.distance.toStringAsFixed(0)}m", Icons.directions_walk),
+                      _summaryBox("MÉDIA", "${activity.avg.toStringAsFixed(1)}°C", Icons.analytics_outlined),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 20),
               ],
             ),
@@ -1176,13 +1316,59 @@ class ActivityDetailScreen extends StatelessWidget {
     );
   }
 
-  Widget _detBox(String l, String v) => Column(children: [Text(l, style: const TextStyle(fontSize: 10, color: Colors.white38)), Text(v, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))]);
-  Widget _summaryBox(String l, String v, IconData i) => Column(children: [Icon(i, color: AppColors.primary, size: 20), const SizedBox(height: 8), Text(l, style: const TextStyle(fontSize: 10, color: Colors.white38, fontWeight: FontWeight.bold)), const SizedBox(height: 4), Text(v, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold))]);
+  // --- Widgets Auxiliares de Estilo ---
+
+  Widget _detBox(String l, String v) => Column(
+    children: [
+      Text(l, style: const TextStyle(fontSize: 10, color: Colors.white38)),
+      Text(v, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))
+    ],
+  );
+
+  Widget _detBoxBpm(String label, String value, Color color) => Column(
+    children: [
+      Text(label, style: const TextStyle(fontSize: 10, color: Colors.white38, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 8),
+      Text(value, style: TextStyle(fontSize: 32, fontWeight: FontWeight.black, color: color)),
+      const Text("bpm", style: TextStyle(fontSize: 11, color: Colors.white24)),
+    ],
+  );
+
+  Widget _summaryBox(String l, String v, IconData i) => Column(
+    children: [
+      Icon(i, color: AppColors.primary, size: 20),
+      const SizedBox(height: 8),
+      Text(l, style: const TextStyle(fontSize: 10, color: Colors.white38, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 4),
+      Text(v, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+    ],
+  );
+
   String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
 }
 
 class ActivityData {
-  final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
-  final List<LatLng> route; final double distance;
-  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
+  final String? id; 
+  final String type; 
+  final int duration; 
+  final List<double> temperatures; 
+  final double min, avg, max; 
+  final double minBpm, avgBpm, maxBpm; // Novos campos
+  final List<LatLng> route; 
+  final double distance;
+
+  ActivityData({
+    this.id, 
+    required this.type, 
+    required this.duration, 
+    required this.temperatures, 
+    required this.min, 
+    required this.avg, 
+    required this.max,
+    this.minBpm = 0, // Default
+    this.avgBpm = 0, 
+    this.maxBpm = 0, 
+    this.route = const [], 
+    this.distance = 0.0
+  });
 }
