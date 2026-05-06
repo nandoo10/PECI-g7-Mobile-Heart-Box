@@ -1308,7 +1308,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     
     setState(() {
       isSending = true;
-      statusMessage = "A procurar as placas (${widget.targetName})...";
+      statusMessage = "A conectar...";
     });
 
     try {
@@ -1334,7 +1334,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             isConnecting = true;
             configuredMacs.add(mac);
 
-            setState(() => statusMessage = "Placa encontrada. A configurar ($mac)...");
+            setState(() => statusMessage = "A configurar...");
             
             try {
               await r.device.connect(timeout: const Duration(seconds: 5));
@@ -1363,20 +1363,16 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
 
               await r.device.disconnect();
               configuredCount++;
-              
-              if (mounted) {
-                setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
-              }
 
               if (configuredCount >= 2) {
                 FlutterBluePlus.stopScan();
                 if (mounted) {
                   setState(() {
-                    statusMessage = "✅ Sucesso! As duas placas foram configuradas.";
+                    statusMessage = "✅ Conectado com sucesso!";
                     isSending = false;
                   });
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
+                    const SnackBar(content: Text("Conectado com sucesso!"), backgroundColor: AppColors.success)
                   );
                   Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
                 }
@@ -1401,9 +1397,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         if (mounted) {
           setState(() {
             isSending = false;
-            statusMessage = configuredCount == 1 
-                ? "⚠️ Apenas 1 placa foi configurada. Tente de novo." 
-                : "❌ Nenhuma placa foi encontrada.";
+            statusMessage = "❌ Falha ao conectar!";
           });
         }
       }
@@ -1413,7 +1407,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
       if (mounted) {
         setState(() {
           isSending = false;
-          statusMessage = "❌ Falha na comunicação Bluetooth.";
+          statusMessage = "❌ Falha ao conectar!";
         });
       }
     }
@@ -1499,7 +1493,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
               child: Text(
                 statusMessage, 
                 textAlign: TextAlign.center, 
-                style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70)
+                style: TextStyle(color: statusMessage.contains("Falha") ? AppColors.danger : Colors.white70)
               )
             ),
           ],
