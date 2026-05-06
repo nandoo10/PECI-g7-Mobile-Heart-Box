@@ -33,9 +33,11 @@ class SessionManager {
   static double lastLon = -8.2245;
   static List<LatLng> route = [];
   static double distance = 0.0;
+  static String serverIp = ""; // IP dinâmico
 
   static Future<void> init() async {
     prefs = await SharedPreferences.getInstance();
+    serverIp = prefs.getString('serverIp') ?? "";
     hasActiveSession = prefs.getBool('hasActiveSession') ?? false;
     activityType = prefs.getString('activityType') ?? "Caminhada";
     String? st = prefs.getString('startTime');
@@ -56,6 +58,11 @@ class SessionManager {
     distance = prefs.getDouble('distance') ?? 0.0;
     lastLat = prefs.getDouble('lastLat') ?? 39.3999;
     lastLon = prefs.getDouble('lastLon') ?? -8.2245;
+  }
+
+  static Future<void> setServerIp(String ip) async {
+    serverIp = ip;
+    await prefs.setString('serverIp', ip);
   }
 
   static Future<void> start(String type) async {
@@ -236,7 +243,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   Future<void> buscarHistoricoDoPC() async {
     setState(() => isLoading = true);
     try {
-      final url = Uri.parse('http://172.20.10.4:1880/lista-atividades');
+      final url = Uri.parse('http://${SessionManager.serverIp}:1880/lista-atividades');
       final response = await http.get(url).timeout(const Duration(seconds: 15));
       
       if (response.statusCode == 200) {
@@ -526,7 +533,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   }
 
   Future<void> connectMQTT() async {
-    client = MqttServerClient('172.20.10.4', 'flutter_${DateTime.now().millisecondsSinceEpoch}');
+    client = MqttServerClient(SessionManager.serverIp, 'flutter_${DateTime.now().millisecondsSinceEpoch}');
     try {
       await client!.connect();
       setState(() => connected = true);
@@ -721,7 +728,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
     if (salvar == true) {
       try {
-        await http.post(Uri.parse('http://172.20.10.4:1880/guardar'), 
+        await http.post(Uri.parse('http://${SessionManager.serverIp}:1880/guardar'), 
           headers: {"Content-Type": "application/json"},
           body: json.encode({
             "type": _nameCtrl.text, 
@@ -1034,11 +1041,11 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
 
   Future<void> apagarUnica(String id) async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: const Text("Apagar Atividade?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR", style: TextStyle(color: AppColors.danger)))]));
-    if (confirmar == true) { try { await http.delete(Uri.parse('http://172.20.10.4:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
+    if (confirmar == true) { try { await http.delete(Uri.parse('http://${SessionManager.serverIp}:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
   }
   Future<void> apagarMultiplas() async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: Text("Apagar ${selectedIds.length} atividades?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR TUDO"))]));
-    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://172.20.10.4:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
+    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://${SessionManager.serverIp}:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
   }
 
   @override
@@ -1278,26 +1285,34 @@ class WifiConfigScreen extends StatefulWidget {
 class _WifiConfigScreenState extends State<WifiConfigScreen> {
   final TextEditingController _ssidController = TextEditingController();
   final TextEditingController _passController = TextEditingController();
-  final TextEditingController _ipController = TextEditingController(text: "172.20.10.4");
+  late final TextEditingController _ipController;
   
   bool isSending = false;
   bool _obscurePassword = true; // Controla se a pass está oculta
   String statusMessage = "Preencha os dados e clique em Enviar";
 
-  // UUIDs de Configuração (Conforme definido no main.dart)[cite: 1]
+  // UUIDs de Configuração (Conforme definido no main.dart)
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
   final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
   final String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
 
+  @override
+  void initState() {
+    super.initState();
+    _ipController = TextEditingController(text: SessionManager.serverIp);
+  }
+
   Future<void> _enviarDadosBLE() async {
+    await SessionManager.setServerIp(_ipController.text); // Guarda o IP configurado globalmente
+    
     setState(() {
       isSending = true;
       statusMessage = "A procurar placa com o nome: ${widget.targetName}...";
     });
 
     try {
-      // Inicia o varrimento Bluetooth[cite: 1]
+      // Inicia o varrimento Bluetooth
       FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
 
       bool found = false;
@@ -1317,15 +1332,15 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             for (var service in services) {
               if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
                 for (var c in service.characteristics) {
-                  // Escreve SSID[cite: 1]
+                  // Escreve SSID
                   if (c.uuid.str.toLowerCase() == UUID_SSID) {
                     await c.write(utf8.encode(_ssidController.text));
                   }
-                  // Escreve Password[cite: 1]
+                  // Escreve Password
                   if (c.uuid.str.toLowerCase() == UUID_PASS) {
                     await c.write(utf8.encode(_passController.text));
                   }
-                  // Escreve IP do Servidor[cite: 1]
+                  // Escreve IP do Servidor
                   if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
                     String ipEnvio = _ipController.text;
                     if (!ipEnvio.contains(':')) ipEnvio += ":8080";
