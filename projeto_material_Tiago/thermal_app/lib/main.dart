@@ -305,6 +305,86 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
     }
   }
 
+  // --- NOVA FUNÇÃO PARA RESETAR AS PLACAS VIA BLE ---
+  Future<void> _resetarPlacasBLE() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text("A Resetar Placas..."),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: AppColors.danger),
+            SizedBox(height: 15),
+            Text("A procurar e limpar memórias Wi-Fi via Bluetooth..."),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+      Set<String> resetMacs = {};
+      int resetCount = 0;
+      bool isConnecting = false;
+      
+      var sub = FlutterBluePlus.scanResults.listen((results) async {
+        if (isConnecting) return;
+
+        for (ScanResult r in results) {
+          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
+          if (devName.contains("THERMAL_CAM") || devName.contains("Heart_Box")) {
+            String mac = r.device.remoteId.str;
+            if (resetMacs.contains(mac)) continue;
+            
+            isConnecting = true;
+            resetMacs.add(mac);
+            
+            try {
+              await r.device.connect(timeout: const Duration(seconds: 5));
+              List<BluetoothService> services = await r.device.discoverServices();
+              for (var service in services) {
+                if (service.uuid.str.toLowerCase() == "0a3b6985-dad6-4759-8852-dcb266d3a59e") {
+                  for (var c in service.characteristics) {
+                    // Envia comando "CLEAR" para SSID
+                    if (c.uuid.str.toLowerCase() == "ab35e54e-fde4-4f83-902a-07785de547b9") {
+                      await c.write(utf8.encode("CLEAR"));
+                    }
+                  }
+                }
+              }
+              await r.device.disconnect();
+              resetCount++;
+            } catch (e) {
+              resetMacs.remove(mac);
+            }
+            isConnecting = false;
+            break;
+          }
+        }
+      });
+
+      await Future.delayed(const Duration(seconds: 10));
+      FlutterBluePlus.stopScan();
+      sub.cancel();
+      
+      if (mounted) {
+        Navigator.pop(context); // Fechar dialog loading
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(resetCount > 0 ? "✅ $resetCount placa(s) resetada(s)!" : "❌ Nenhuma placa em modo Bluetooth encontrada."),
+          backgroundColor: resetCount > 0 ? AppColors.success : AppColors.danger,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("❌ Erro no Bluetooth"), backgroundColor: AppColors.danger));
+      }
+    }
+  }
+
   void _mostrarDialogoRetomar() {
     showDialog(
       context: context,
@@ -318,50 +398,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
         ],
       ),
     );
-  }
-
-  Future<void> _resetWiFisOnBoards() async {
-    if (SessionManager.serverIp.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("O IP do servidor não está definido!")));
-      return;
-    }
-    
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => const Center(child: CircularProgressIndicator()),
-    );
-
-    try {
-      final client = MqttServerClient(SessionManager.serverIp, 'flutter_reset_${DateTime.now().millisecondsSinceEpoch}');
-      client.logging(on: false);
-      await client.connect();
-      
-      if (client.connectionStatus!.state == MqttConnectionState.connected) {
-        final builder = MqttClientPayloadBuilder();
-        builder.addString('RESET');
-        client.publishMessage('heartbox/reset', MqttQos.atMostOnce, builder.payload!);
-        await Future.delayed(const Duration(seconds: 1)); // Dá tempo para a mensagem chegar
-        client.disconnect();
-        
-        if (mounted) {
-          Navigator.pop(context); // Fechar loading
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Comando de reset enviado para a rede!"), backgroundColor: AppColors.success)
-          );
-        }
-      } else {
-        if (mounted) {
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Erro a ligar ao MQTT. Estás na mesma rede?")));
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Falha ao enviar comando.")));
-      }
-    }
   }
 
   @override
@@ -384,11 +420,11 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
                 foregroundColor: Colors.black,
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 30),
             ElevatedButton.icon(
-              onPressed: _resetWiFisOnBoards,
-              icon: const Icon(Icons.wifi_off, size: 30),
-              label: const Text("Resetar Wi-Fi das Placas"),
+              onPressed: _resetarPlacasBLE,
+              icon: const Icon(Icons.refresh, size: 30),
+              label: const Text("Resetar Placas (Esquecer Wi-Fi)"),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
                 backgroundColor: AppColors.danger,
@@ -1296,7 +1332,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
                   String qrContent = barcode.rawValue!;
                   print("QR Lido: $qrContent");
 
-                  // Salta para o formulário passando o texto lido (THERMAL_CAM)
+                  // Salta para o formulário passando o texto lido
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(builder: (_) => WifiConfigScreen(targetName: qrContent)),
@@ -1335,7 +1371,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
 /// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
 ////////////////////////////////////////////////////
 class WifiConfigScreen extends StatefulWidget {
-  final String targetName; // Recebe o nome lido do QR Code (ex: THERMAL_CAM-Heart_Box)
+  final String targetName; 
   const WifiConfigScreen({super.key, required this.targetName});
 
   @override
@@ -1348,10 +1384,9 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   late final TextEditingController _ipController;
   
   bool isSending = false;
-  bool _obscurePassword = true; // Controla se a pass está oculta
+  bool _obscurePassword = true; 
   String statusMessage = "Preencha os dados e clique em Enviar";
 
-  // UUIDs de Configuração (Conforme definido no main.dart)
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
   final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
@@ -1368,112 +1403,108 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     
     setState(() {
       isSending = true;
-      statusMessage = "A procurar a ESP32-CAM...";
+      statusMessage = "A procurar as placas (${widget.targetName})...";
     });
 
-    // 1. TENTAR LIGAR À ESP32-CAM PRIMEIRO (nome: "THERMAL_CAM")
-    // A ESP32-CAM desconecta-se precocemente de propósito, por isso o erro é esperado.
-    bool camConfigurada = await _conectarEConfigurar("THERMAL_CAM", expectDisconnect: true);
+    try {
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
-    if (!camConfigurada) {
-      if (mounted) setState(() { isSending = false; statusMessage = "❌ Falha. A ESP32-CAM não foi encontrada ou configurada."; });
-      return;
-    }
+      int configuredCount = 0;
+      Set<String> configuredMacs = {};
+      bool isConnecting = false;
+      
+      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        if (isConnecting) return;
 
-    if (mounted) {
-      setState(() => statusMessage = "✅ CAM configurada! A procurar a ESP32-S3...");
-    }
-    
-    // Pequena pausa para garantir que a rádio BLE assenta as poeiras
-    await Future.delayed(const Duration(seconds: 2));
-
-    // 2. TENTAR LIGAR À ESP32-S3 A SEGUIR (nome: "THERMAL_CAM-Heart_Box")
-    // O nome vem do QR Code via widget.targetName
-    bool s3Configurada = await _conectarEConfigurar(widget.targetName, expectDisconnect: false);
-
-    if (!s3Configurada) {
-      if (mounted) setState(() { isSending = false; statusMessage = "❌ Falha a configurar a ESP32-S3."; });
-      return;
-    }
-
-    if (mounted) {
-      setState(() {
-        statusMessage = "✅ Sucesso! As duas placas foram configuradas na ordem certa.";
-        isSending = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
-      );
-      Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
-    }
-  }
-
-  // Função independente para lidar com a configuração de 1 placa exata pelo nome
-  Future<bool> _conectarEConfigurar(String targetName, {required bool expectDisconnect}) async {
-    Completer<bool> completer = Completer();
-    bool found = false;
-    
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
-    
-    StreamSubscription? sub;
-    sub = FlutterBluePlus.scanResults.listen((results) async {
-      for (ScanResult r in results) {
-        String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
-        
-        if (devName == targetName && !found) {
-          found = true;
-          FlutterBluePlus.stopScan();
-          sub?.cancel();
+        for (ScanResult r in results) {
+          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
           
-          try {
-            await r.device.connect(timeout: const Duration(seconds: 5));
-            List<BluetoothService> services = await r.device.discoverServices();
+          if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
+            String mac = r.device.remoteId.str;
+            if (configuredMacs.contains(mac)) continue;
             
-            for (var service in services) {
-              if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
-                for (var c in service.characteristics) {
-                  // Se a placa desligar o BLE precocemente, o catch ignorará o erro e prosseguirá
-                  if (c.uuid.str.toLowerCase() == UUID_SSID) {
-                    try { await c.write(utf8.encode(_ssidController.text)); } catch(_) {}
-                    await Future.delayed(const Duration(milliseconds: 300));
-                  }
-                  if (c.uuid.str.toLowerCase() == UUID_PASS) {
-                    try { await c.write(utf8.encode(_passController.text)); } catch(_) {}
-                    await Future.delayed(const Duration(milliseconds: 300));
-                  }
-                  if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                    String ipEnvio = _ipController.text;
-                    if (!ipEnvio.contains(':')) ipEnvio += ":8080";
-                    try { await c.write(utf8.encode(ipEnvio)); } catch(_) {}
+            isConnecting = true;
+            configuredMacs.add(mac);
+
+            setState(() => statusMessage = "Placa encontrada. A configurar ($mac)...");
+            
+            try {
+              await r.device.connect(timeout: const Duration(seconds: 5));
+              
+              List<BluetoothService> services = await r.device.discoverServices();
+              for (var service in services) {
+                if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
+                  for (var c in service.characteristics) {
+                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
+                      try { await c.write(utf8.encode(_ssidController.text)); } catch(_) {}
+                      await Future.delayed(const Duration(milliseconds: 300));
+                    }
+                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
+                      try { await c.write(utf8.encode(_passController.text)); } catch(_) {}
+                      await Future.delayed(const Duration(milliseconds: 300));
+                    }
+                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
+                      String ipEnvio = _ipController.text;
+                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
+                      try { await c.write(utf8.encode(ipEnvio)); } catch(_) {}
+                    }
                   }
                 }
               }
-            }
 
-            try { await r.device.disconnect(); } catch (_) {}
-            
-            if (!completer.isCompleted) completer.complete(true);
-          } catch (e) {
-            // Se ocorreu falha e era esperado que houvesse crash/desconexão, é considerado SUCESSO!
-            if (expectDisconnect && !completer.isCompleted) {
-              completer.complete(true); 
-            } else if (!completer.isCompleted) {
-              completer.complete(false);
+              try { await r.device.disconnect(); } catch(_) {}
+              configuredCount++;
+              
+              if (mounted) {
+                setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
+              }
+
+              if (configuredCount >= 2) {
+                FlutterBluePlus.stopScan();
+                if (mounted) {
+                  setState(() {
+                    statusMessage = "✅ Sucesso! As duas placas foram configuradas.";
+                    isSending = false;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
+                  );
+                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+                }
+              }
+            } catch (e) {
+              configuredMacs.remove(mac);
             }
+            
+            isConnecting = false;
+            break;
           }
         }
-      }
-    });
+      });
 
-    Future.delayed(const Duration(seconds: 15), () {
-      if (!completer.isCompleted) {
+      await Future.delayed(const Duration(seconds: 15));
+      
+      if (configuredCount < 2) {
         FlutterBluePlus.stopScan();
-        sub?.cancel();
-        completer.complete(false);
+        if (mounted) {
+          setState(() {
+            isSending = false;
+            statusMessage = configuredCount == 1 
+                ? "⚠️ Apenas 1 placa foi configurada. Tente de novo." 
+                : "❌ Nenhuma placa foi encontrada.";
+          });
+        }
       }
-    });
+      subscription.cancel();
 
-    return completer.future;
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          isSending = false;
+          statusMessage = "❌ Falha na comunicação Bluetooth.";
+        });
+      }
+    }
   }
 
   @override
@@ -1485,11 +1516,10 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Alvo: Rede Sensor Duplo", 
+            Text("Alvo: ${widget.targetName}", 
                  style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
-            // Campo SSID
             TextField(
               controller: _ssidController,
               decoration: InputDecoration(
@@ -1501,7 +1531,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             ),
             const SizedBox(height: 15),
             
-            // Campo Password com Ícone de Olho
             TextField(
               controller: _passController,
               obscureText: _obscurePassword,
@@ -1519,10 +1548,8 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 ),
               ),
             ),
-            
             const SizedBox(height: 15),
             
-            // Campo IP
             TextField(
               controller: _ipController,
               decoration: InputDecoration(
@@ -1532,7 +1559,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
               ),
             ),
-            
             const SizedBox(height: 40),
             
             SizedBox(
