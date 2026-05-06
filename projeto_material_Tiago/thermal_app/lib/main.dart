@@ -305,86 +305,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
     }
   }
 
-  // --- NOVA FUNÇÃO PARA RESETAR AS PLACAS VIA BLE ---
-  Future<void> _resetarPlacasBLE() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text("A Resetar Placas..."),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(color: AppColors.danger),
-            SizedBox(height: 15),
-            Text("A procurar e limpar memórias Wi-Fi via Bluetooth..."),
-          ],
-        ),
-      ),
-    );
-
-    try {
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
-      Set<String> resetMacs = {};
-      int resetCount = 0;
-      bool isConnecting = false;
-      
-      var sub = FlutterBluePlus.scanResults.listen((results) async {
-        if (isConnecting) return;
-
-        for (ScanResult r in results) {
-          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
-          if (devName.contains("THERMAL_CAM") || devName.contains("Heart_Box")) {
-            String mac = r.device.remoteId.str;
-            if (resetMacs.contains(mac)) continue;
-            
-            isConnecting = true;
-            resetMacs.add(mac);
-            
-            try {
-              await r.device.connect(timeout: const Duration(seconds: 5));
-              List<BluetoothService> services = await r.device.discoverServices();
-              for (var service in services) {
-                if (service.uuid.str.toLowerCase() == "0a3b6985-dad6-4759-8852-dcb266d3a59e") {
-                  for (var c in service.characteristics) {
-                    // Envia comando "CLEAR" para SSID
-                    if (c.uuid.str.toLowerCase() == "ab35e54e-fde4-4f83-902a-07785de547b9") {
-                      await c.write(utf8.encode("CLEAR"));
-                    }
-                  }
-                }
-              }
-              await r.device.disconnect();
-              resetCount++;
-            } catch (e) {
-              resetMacs.remove(mac);
-            }
-            isConnecting = false;
-            break;
-          }
-        }
-      });
-
-      await Future.delayed(const Duration(seconds: 10));
-      FlutterBluePlus.stopScan();
-      sub.cancel();
-      
-      if (mounted) {
-        Navigator.pop(context); // Fechar dialog loading
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(resetCount > 0 ? "✅ $resetCount placa(s) resetada(s)!" : "❌ Nenhuma placa em modo Bluetooth encontrada."),
-          backgroundColor: resetCount > 0 ? AppColors.success : AppColors.danger,
-        ));
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("❌ Erro no Bluetooth"), backgroundColor: AppColors.danger));
-      }
-    }
-  }
-
   void _mostrarDialogoRetomar() {
     showDialog(
       context: context,
@@ -403,35 +323,19 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // ABA 0: CONFIGURAÇÕES (NOVA COM LEITOR QR E RESET)
+      // ABA 0: CONFIGURAÇÕES (NOVA COM LEITOR QR)
       Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
-              },
-              icon: const Icon(Icons.qr_code_scanner, size: 30),
-              label: const Text("Configurar Nova Placa (Wi-Fi)"),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.black,
-              ),
-            ),
-            const SizedBox(height: 30),
-            ElevatedButton.icon(
-              onPressed: _resetarPlacasBLE,
-              icon: const Icon(Icons.refresh, size: 30),
-              label: const Text("Resetar Placas (Esquecer Wi-Fi)"),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
-                backgroundColor: AppColors.danger,
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ],
+        child: ElevatedButton.icon(
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
+          },
+          icon: const Icon(Icons.qr_code_scanner, size: 30),
+          label: const Text("Configurar Nova Placa (Wi-Fi)"),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.black,
+          ),
         ),
       ),
       
@@ -1332,7 +1236,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
                   String qrContent = barcode.rawValue!;
                   print("QR Lido: $qrContent");
 
-                  // Salta para o formulário passando o texto lido
+                  // Salta para o formulário passando o texto lido (THERMAL_CAM)
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(builder: (_) => WifiConfigScreen(targetName: qrContent)),
@@ -1371,7 +1275,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
 /// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
 ////////////////////////////////////////////////////
 class WifiConfigScreen extends StatefulWidget {
-  final String targetName; 
+  final String targetName; // Recebe o nome lido do QR Code (ex: THERMAL_CAM)
   const WifiConfigScreen({super.key, required this.targetName});
 
   @override
@@ -1384,9 +1288,10 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   late final TextEditingController _ipController;
   
   bool isSending = false;
-  bool _obscurePassword = true; 
+  bool _obscurePassword = true; // Controla se a pass está oculta
   String statusMessage = "Preencha os dados e clique em Enviar";
 
+  // UUIDs de Configuração (Conforme definido no main.dart)
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
   final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
@@ -1399,7 +1304,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   }
 
   Future<void> _enviarDadosBLE() async {
-    await SessionManager.setServerIp(_ipController.text);
+    await SessionManager.setServerIp(_ipController.text); // Guarda o IP configurado globalmente
     
     setState(() {
       isSending = true;
@@ -1407,6 +1312,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     });
 
     try {
+      // Inicia o varrimento Bluetooth
       FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
       int configuredCount = 0;
@@ -1414,11 +1320,13 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
       bool isConnecting = false;
       
       var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        // Evita que tente ligar a várias placas em simultâneo e encrave
         if (isConnecting) return;
 
         for (ScanResult r in results) {
           String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
           
+          // Usa 'contains' para garantir que apanha as duas placas caso o nome varie ligeiramente
           if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
             String mac = r.device.remoteId.str;
             if (configuredMacs.contains(mac)) continue;
@@ -1435,24 +1343,25 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
               for (var service in services) {
                 if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
                   for (var c in service.characteristics) {
+                    // Escreve SSID
                     if (c.uuid.str.toLowerCase() == UUID_SSID) {
-                      try { await c.write(utf8.encode(_ssidController.text)); } catch(_) {}
-                      await Future.delayed(const Duration(milliseconds: 300));
+                      await c.write(utf8.encode(_ssidController.text));
                     }
+                    // Escreve Password
                     if (c.uuid.str.toLowerCase() == UUID_PASS) {
-                      try { await c.write(utf8.encode(_passController.text)); } catch(_) {}
-                      await Future.delayed(const Duration(milliseconds: 300));
+                      await c.write(utf8.encode(_passController.text));
                     }
+                    // Escreve IP do Servidor
                     if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
                       String ipEnvio = _ipController.text;
                       if (!ipEnvio.contains(':')) ipEnvio += ":8080";
-                      try { await c.write(utf8.encode(ipEnvio)); } catch(_) {}
+                      await c.write(utf8.encode(ipEnvio));
                     }
                   }
                 }
               }
 
-              try { await r.device.disconnect(); } catch(_) {}
+              await r.device.disconnect();
               configuredCount++;
               
               if (mounted) {
@@ -1473,15 +1382,18 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 }
               }
             } catch (e) {
+              // Se a ligação falhou, retira da lista para podermos tentar novamente
               configuredMacs.remove(mac);
             }
             
             isConnecting = false;
+            // Interrompe o loop para processar novo evento de scan de forma limpa
             break;
           }
         }
       });
 
+      // Aguarda 15 segundos para dar tempo de encontrar e processar as duas
       await Future.delayed(const Duration(seconds: 15));
       
       if (configuredCount < 2) {
@@ -1520,6 +1432,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                  style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
+            // Campo SSID
             TextField(
               controller: _ssidController,
               decoration: InputDecoration(
@@ -1531,6 +1444,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             ),
             const SizedBox(height: 15),
             
+            // Campo Password com Ícone de Olho
             TextField(
               controller: _passController,
               obscureText: _obscurePassword,
@@ -1548,8 +1462,10 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 ),
               ),
             ),
+            
             const SizedBox(height: 15),
             
+            // Campo IP
             TextField(
               controller: _ipController,
               decoration: InputDecoration(
@@ -1559,6 +1475,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
               ),
             ),
+            
             const SizedBox(height: 40),
             
             SizedBox(
