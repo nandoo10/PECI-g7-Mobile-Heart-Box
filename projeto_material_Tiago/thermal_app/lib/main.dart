@@ -1308,71 +1308,102 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     
     setState(() {
       isSending = true;
-      statusMessage = "A procurar placa com o nome: ${widget.targetName}...";
+      statusMessage = "A procurar as placas (${widget.targetName})...";
     });
 
     try {
       // Inicia o varrimento Bluetooth
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
-      bool found = false;
+      int configuredCount = 0;
+      Set<String> configuredMacs = {};
+      bool isConnecting = false;
       
       var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        // Evita que tente ligar a várias placas em simultâneo e encrave
+        if (isConnecting) return;
+
         for (ScanResult r in results) {
-          if (r.device.advName == widget.targetName || r.advertisementData.advName == widget.targetName) {
-            found = true;
-            FlutterBluePlus.stopScan();
-
-            setState(() => statusMessage = "Placa encontrada! A conectar...");
+          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
+          
+          // Usa 'contains' para garantir que apanha as duas placas caso o nome varie ligeiramente
+          if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
+            String mac = r.device.remoteId.str;
+            if (configuredMacs.contains(mac)) continue;
             
-            await r.device.connect();
-            setState(() => statusMessage = "Conectado. A injetar credenciais...");
+            isConnecting = true;
+            configuredMacs.add(mac);
 
-            List<BluetoothService> services = await r.device.discoverServices();
-            for (var service in services) {
-              if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
-                for (var c in service.characteristics) {
-                  // Escreve SSID
-                  if (c.uuid.str.toLowerCase() == UUID_SSID) {
-                    await c.write(utf8.encode(_ssidController.text));
-                  }
-                  // Escreve Password
-                  if (c.uuid.str.toLowerCase() == UUID_PASS) {
-                    await c.write(utf8.encode(_passController.text));
-                  }
-                  // Escreve IP do Servidor
-                  if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                    String ipEnvio = _ipController.text;
-                    if (!ipEnvio.contains(':')) ipEnvio += ":8080";
-                    await c.write(utf8.encode(ipEnvio));
+            setState(() => statusMessage = "Placa encontrada. A configurar ($mac)...");
+            
+            try {
+              await r.device.connect(timeout: const Duration(seconds: 5));
+              
+              List<BluetoothService> services = await r.device.discoverServices();
+              for (var service in services) {
+                if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
+                  for (var c in service.characteristics) {
+                    // Escreve SSID
+                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
+                      await c.write(utf8.encode(_ssidController.text));
+                    }
+                    // Escreve Password
+                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
+                      await c.write(utf8.encode(_passController.text));
+                    }
+                    // Escreve IP do Servidor
+                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
+                      String ipEnvio = _ipController.text;
+                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
+                      await c.write(utf8.encode(ipEnvio));
+                    }
                   }
                 }
               }
-            }
 
-            await r.device.disconnect();
-            
-            if (mounted) {
-              setState(() {
-                statusMessage = "✅ Configuração enviada!";
-                isSending = false;
-              });
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Credenciais aplicadas!"), backgroundColor: AppColors.success)
-              );
-              Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+              await r.device.disconnect();
+              configuredCount++;
+              
+              if (mounted) {
+                setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
+              }
+
+              if (configuredCount >= 2) {
+                FlutterBluePlus.stopScan();
+                if (mounted) {
+                  setState(() {
+                    statusMessage = "✅ Sucesso! As duas placas foram configuradas.";
+                    isSending = false;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
+                  );
+                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+                }
+              }
+            } catch (e) {
+              // Se a ligação falhou, retira da lista para podermos tentar novamente
+              configuredMacs.remove(mac);
             }
+            
+            isConnecting = false;
+            // Interrompe o loop para processar novo evento de scan de forma limpa
+            break;
           }
         }
       });
 
-      await Future.delayed(const Duration(seconds: 10));
-      if (!found) {
+      // Aguarda 15 segundos para dar tempo de encontrar e processar as duas
+      await Future.delayed(const Duration(seconds: 15));
+      
+      if (configuredCount < 2) {
         FlutterBluePlus.stopScan();
         if (mounted) {
           setState(() {
             isSending = false;
-            statusMessage = "❌ Dispositivo não encontrado.";
+            statusMessage = configuredCount == 1 
+                ? "⚠️ Apenas 1 placa foi configurada. Tente de novo." 
+                : "❌ Nenhuma placa foi encontrada.";
           });
         }
       }
@@ -1459,7 +1490,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 ),
                 child: isSending 
                     ? const CircularProgressIndicator(color: Colors.black) 
-                    : const Text("ENVIAR PARA A PLACA", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    : const Text("ENVIAR PARA AS PLACAS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               ),
             ),
             
