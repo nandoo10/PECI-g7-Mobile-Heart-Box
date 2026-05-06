@@ -1275,7 +1275,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
 /// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
 ////////////////////////////////////////////////////
 class WifiConfigScreen extends StatefulWidget {
-  final String targetName; // Recebe o nome lido do QR Code (ex: THERMAL_CAM-Heart_Box)
+  final String targetName; // Recebe o nome lido do QR Code (ex: THERMAL_CAM)
   const WifiConfigScreen({super.key, required this.targetName});
 
   @override
@@ -1304,116 +1304,119 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   }
 
   Future<void> _enviarDadosBLE() async {
-    await SessionManager.setServerIp(_ipController.text);
+    await SessionManager.setServerIp(_ipController.text); // Guarda o IP configurado globalmente
     
     setState(() {
       isSending = true;
-      statusMessage = "A procurar a ESP32-CAM...";
+      statusMessage = "A procurar as placas (${widget.targetName})...";
     });
 
-    // 1. TENTAR LIGAR À ESP32-CAM PRIMEIRO (nome: "THERMAL_CAM")
-    // A ESP32-CAM desconecta-se precocemente de propósito, por isso o erro é esperado.
-    bool camConfigurada = await _conectarEConfigurar("THERMAL_CAM", expectDisconnect: true);
+    try {
+      // Inicia o varrimento Bluetooth
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
-    if (!camConfigurada) {
-      if (mounted) setState(() { isSending = false; statusMessage = "❌ Falha. A ESP32-CAM não foi encontrada ou configurada."; });
-      return;
-    }
+      int configuredCount = 0;
+      Set<String> configuredMacs = {};
+      bool isConnecting = false;
+      
+      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        // Evita que tente ligar a várias placas em simultâneo e encrave
+        if (isConnecting) return;
 
-    if (mounted) {
-      setState(() => statusMessage = "✅ CAM configurada! A procurar a ESP32-S3...");
-    }
-    
-    // Pequena pausa para garantir que a rádio BLE assenta as poeiras
-    await Future.delayed(const Duration(seconds: 2));
-
-    // 2. TENTAR LIGAR À ESP32-S3 A SEGUIR (nome: "THERMAL_CAM-Heart_Box")
-    // O nome vem do QR Code via widget.targetName
-    bool s3Configurada = await _conectarEConfigurar(widget.targetName, expectDisconnect: false);
-
-    if (!s3Configurada) {
-      if (mounted) setState(() { isSending = false; statusMessage = "❌ Falha a configurar a ESP32-S3."; });
-      return;
-    }
-
-    if (mounted) {
-      setState(() {
-        statusMessage = "✅ Sucesso! As duas placas foram configuradas na ordem certa.";
-        isSending = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
-      );
-      Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
-    }
-  }
-
-  // Função independente para lidar com a configuração de 1 placa exata pelo nome
-  Future<bool> _conectarEConfigurar(String targetName, {required bool expectDisconnect}) async {
-    Completer<bool> completer = Completer();
-    bool found = false;
-    
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
-    
-    StreamSubscription? sub;
-    sub = FlutterBluePlus.scanResults.listen((results) async {
-      for (ScanResult r in results) {
-        String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
-        
-        if (devName == targetName && !found) {
-          found = true;
-          FlutterBluePlus.stopScan();
-          sub?.cancel();
+        for (ScanResult r in results) {
+          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
           
-          try {
-            await r.device.connect(timeout: const Duration(seconds: 5));
-            List<BluetoothService> services = await r.device.discoverServices();
+          // Usa 'contains' para garantir que apanha as duas placas caso o nome varie ligeiramente
+          if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
+            String mac = r.device.remoteId.str;
+            if (configuredMacs.contains(mac)) continue;
             
-            for (var service in services) {
-              if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
-                for (var c in service.characteristics) {
-                  // Se a placa desligar o BLE precocemente, o catch ignorará o erro e prosseguirá
-                  if (c.uuid.str.toLowerCase() == UUID_SSID) {
-                    try { await c.write(utf8.encode(_ssidController.text)); } catch(_) {}
-                    await Future.delayed(const Duration(milliseconds: 300));
-                  }
-                  if (c.uuid.str.toLowerCase() == UUID_PASS) {
-                    try { await c.write(utf8.encode(_passController.text)); } catch(_) {}
-                    await Future.delayed(const Duration(milliseconds: 300));
-                  }
-                  if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                    String ipEnvio = _ipController.text;
-                    if (!ipEnvio.contains(':')) ipEnvio += ":8080";
-                    try { await c.write(utf8.encode(ipEnvio)); } catch(_) {}
+            isConnecting = true;
+            configuredMacs.add(mac);
+
+            setState(() => statusMessage = "Placa encontrada. A configurar ($mac)...");
+            
+            try {
+              await r.device.connect(timeout: const Duration(seconds: 5));
+              
+              List<BluetoothService> services = await r.device.discoverServices();
+              for (var service in services) {
+                if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
+                  for (var c in service.characteristics) {
+                    // Escreve SSID
+                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
+                      await c.write(utf8.encode(_ssidController.text));
+                    }
+                    // Escreve Password
+                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
+                      await c.write(utf8.encode(_passController.text));
+                    }
+                    // Escreve IP do Servidor
+                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
+                      String ipEnvio = _ipController.text;
+                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
+                      await c.write(utf8.encode(ipEnvio));
+                    }
                   }
                 }
               }
-            }
 
-            try { await r.device.disconnect(); } catch (_) {}
-            
-            if (!completer.isCompleted) completer.complete(true);
-          } catch (e) {
-            // Se ocorreu falha e era esperado que houvesse crash/desconexão, é considerado SUCESSO!
-            if (expectDisconnect && !completer.isCompleted) {
-              completer.complete(true); 
-            } else if (!completer.isCompleted) {
-              completer.complete(false);
+              await r.device.disconnect();
+              configuredCount++;
+              
+              if (mounted) {
+                setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
+              }
+
+              if (configuredCount >= 2) {
+                FlutterBluePlus.stopScan();
+                if (mounted) {
+                  setState(() {
+                    statusMessage = "✅ Sucesso! As duas placas foram configuradas.";
+                    isSending = false;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
+                  );
+                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+                }
+              }
+            } catch (e) {
+              // Se a ligação falhou, retira da lista para podermos tentar novamente
+              configuredMacs.remove(mac);
             }
+            
+            isConnecting = false;
+            // Interrompe o loop para processar novo evento de scan de forma limpa
+            break;
           }
         }
-      }
-    });
+      });
 
-    Future.delayed(const Duration(seconds: 15), () {
-      if (!completer.isCompleted) {
+      // Aguarda 15 segundos para dar tempo de encontrar e processar as duas
+      await Future.delayed(const Duration(seconds: 15));
+      
+      if (configuredCount < 2) {
         FlutterBluePlus.stopScan();
-        sub?.cancel();
-        completer.complete(false);
+        if (mounted) {
+          setState(() {
+            isSending = false;
+            statusMessage = configuredCount == 1 
+                ? "⚠️ Apenas 1 placa foi configurada. Tente de novo." 
+                : "❌ Nenhuma placa foi encontrada.";
+          });
+        }
       }
-    });
+      subscription.cancel();
 
-    return completer.future;
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          isSending = false;
+          statusMessage = "❌ Falha na comunicação Bluetooth.";
+        });
+      }
+    }
   }
 
   @override
@@ -1425,7 +1428,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Alvo: Rede Sensor Duplo", 
+            Text("Alvo: ${widget.targetName}", 
                  style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
