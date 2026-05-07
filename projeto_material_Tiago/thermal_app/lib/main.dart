@@ -29,6 +29,7 @@ class SessionManager {
   static String activityType = "Caminhada";
   static DateTime? startTime; 
   static List<double> temps = [];
+  static List<int> bpms = []; // ✅ NOVO: lista de BPMs da sessão
   static double lastLat = 39.3999;
   static double lastLon = -8.2245;
   static List<LatLng> route = [];
@@ -47,6 +48,13 @@ class SessionManager {
     if (tempsJson != null) {
       List<dynamic> decoded = jsonDecode(tempsJson);
       temps = decoded.map((e) => (e as num).toDouble()).toList();
+    }
+
+    // ✅ NOVO: Recuperar BPMs guardados
+    String? bpmsJson = prefs.getString('bpms');
+    if (bpmsJson != null) {
+      List<dynamic> decoded = jsonDecode(bpmsJson);
+      bpms = decoded.map((e) => (e as num).toInt()).toList();
     }
     
     String? routeJson = prefs.getString('route');
@@ -70,23 +78,27 @@ class SessionManager {
     activityType = type;
     startTime = DateTime.now();
     temps = [];
+    bpms = []; // ✅ NOVO: reset dos BPMs
     route = [];
     distance = 0.0;
     await prefs.setBool('hasActiveSession', true);
     await prefs.setString('activityType', type);
     await prefs.setString('startTime', startTime!.toIso8601String());
     await prefs.setString('temps', '[]');
+    await prefs.setString('bpms', '[]'); // ✅ NOVO
     await prefs.setString('route', '[]');
     await prefs.setDouble('distance', 0.0);
   }
 
-  static Future<void> saveProgress(List<double> t, double la, double lo, List<LatLng> r, double d) async {
+  static Future<void> saveProgress(List<double> t, List<int> b, double la, double lo, List<LatLng> r, double d) async {
     temps = List.from(t);
+    bpms = List.from(b); // ✅ NOVO
     lastLat = la;
     lastLon = lo;
     route = List.from(r);
     distance = d;
     await prefs.setString('temps', jsonEncode(temps));
+    await prefs.setString('bpms', jsonEncode(bpms)); // ✅ NOVO
     await prefs.setDouble('lastLat', la);
     await prefs.setDouble('lastLon', lo);
     await prefs.setString('route', jsonEncode(route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()));
@@ -97,6 +109,7 @@ class SessionManager {
     hasActiveSession = false;
     startTime = null;
     temps = [];
+    bpms = []; // ✅ NOVO
     route = [];
     distance = 0.0;
     await prefs.clear(); 
@@ -282,8 +295,9 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               distExtraida = double.tryParse(item['distance'].toString()) ?? 0.0;
             }
 
+            // ✅ CORRIGIDO: lê 'bpm_history' em vez de 'bpm_readings'
             List<int> bpmExtraidos = [];
-            var rawBpm = item['bpm_readings'];
+            var rawBpm = item['bpm_history'];
             if (rawBpm is List) {
               bpmExtraidos = rawBpm.map((e) => (e as num).toInt()).toList();
             } else if (rawBpm is String) {
@@ -337,7 +351,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // ABA 0: CONFIGURAÇÕES (NOVA COM LEITOR QR)
+      // ABA 0: CONFIGURAÇÕES (COM LEITOR QR)
       Center(
         child: ElevatedButton.icon(
           onPressed: () {
@@ -464,6 +478,7 @@ class MonitorScreen extends StatefulWidget {
 class _MonitorScreenState extends State<MonitorScreen> {
   MqttServerClient? client;
   List<double> allTemps = [];
+  List<int> allBpms = []; // ✅ NOVO: lista acumuladora de BPMs
   double currentTemp = 0;
   
   double lat = 39.3999;
@@ -489,7 +504,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
-  // --- NOVAS VARIÁVEIS ECG / BPM ---
+  // Variáveis ECG / BPM
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -503,6 +518,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       SessionManager.start(widget.atividade);
     } else {
       allTemps = SessionManager.temps;
+      allBpms = SessionManager.bpms; // ✅ NOVO: recuperar BPMs da sessão
       lat = SessionManager.lastLat;
       lon = SessionManager.lastLon;
       route = SessionManager.route;
@@ -517,7 +533,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && !isPaused) {
         setState(() { seconds = SessionManager.elapsedSeconds; });
-        SessionManager.saveProgress(allTemps, lat, lon, route, distance);
+        // ✅ CORRIGIDO: passa allBpms para o saveProgress
+        SessionManager.saveProgress(allTemps, allBpms, lat, lon, route, distance);
       }
     });
 
@@ -537,7 +554,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     super.dispose();
   }
 
-  // Dispara o piscar do coração quando recebe BPM novo
   void _triggerHeartBlink() {
     heartBlinkTimer?.cancel();
     setState(() => heartBlinkState = true);
@@ -556,7 +572,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
-      // NOVOS TÓPICOS ECG E BPM
       client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
       client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
@@ -611,7 +626,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
               }
             }
           } else if (topic == 'heartbox/heart/ecg') {
-            // ACUMULA PONTOS ECG PARA O GRÁFICO (janela deslizante)
             double val = double.tryParse(payload) ?? 0.0;
             ecgPoints.add(val);
             if (ecgPoints.length > ecgMaxPoints) {
@@ -620,7 +634,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
           } else if (topic == 'heartbox/heart/bpm') {
             int newBpm = int.tryParse(payload) ?? 0;
             currentBpm = newBpm;
-            if (newBpm > 0) _triggerHeartBlink();
+            if (newBpm > 0) {
+              allBpms.add(newBpm); // ✅ NOVO: acumula o BPM na lista
+              _triggerHeartBlink();
+            }
           }
         });
       });
@@ -749,7 +766,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
             "duration": seconds, 
             "temperatures": allTemps,
             "distance": distance,
-            "route": route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()
+            "route": route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList(),
+            "bpm_history": allBpms, // ✅ NOVO: envia os BPMs ao guardar
           }),
         );
       } catch (e) { print(e); }
@@ -1346,7 +1364,6 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
                   String qrContent = barcode.rawValue!;
                   print("QR Lido: $qrContent");
 
-                  // Salta para o formulário passando o texto lido (THERMAL_CAM)
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(builder: (_) => WifiConfigScreen(targetName: qrContent)),
@@ -1385,7 +1402,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
 /// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
 ////////////////////////////////////////////////////
 class WifiConfigScreen extends StatefulWidget {
-  final String targetName; // Recebe o nome lido do QR Code (ex: THERMAL_CAM)
+  final String targetName;
   const WifiConfigScreen({super.key, required this.targetName});
 
   @override
@@ -1398,10 +1415,9 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   late final TextEditingController _ipController;
   
   bool isSending = false;
-  bool _obscurePassword = true; // Controla se a pass está oculta
+  bool _obscurePassword = true;
   String statusMessage = "Preencha os dados e clique em Enviar";
 
-  // UUIDs de Configuração (Conforme definido no main.dart)
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
   final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
@@ -1414,7 +1430,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   }
 
   Future<void> _enviarDadosBLE() async {
-    await SessionManager.setServerIp(_ipController.text); // Guarda o IP configurado globalmente
+    await SessionManager.setServerIp(_ipController.text);
     
     setState(() {
       isSending = true;
@@ -1422,7 +1438,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     });
 
     try {
-      // Inicia o varrimento Bluetooth
       FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
       int configuredCount = 0;
@@ -1430,13 +1445,11 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
       bool isConnecting = false;
       
       var subscription = FlutterBluePlus.scanResults.listen((results) async {
-        // Evita que tente ligar a várias placas em simultâneo e encrave
         if (isConnecting) return;
 
         for (ScanResult r in results) {
           String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
           
-          // Usa 'contains' para garantir que apanha as duas placas caso o nome varie ligeiramente
           if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
             String mac = r.device.remoteId.str;
             if (configuredMacs.contains(mac)) continue;
@@ -1453,15 +1466,12 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
               for (var service in services) {
                 if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
                   for (var c in service.characteristics) {
-                    // Escreve SSID
                     if (c.uuid.str.toLowerCase() == UUID_SSID) {
                       await c.write(utf8.encode(_ssidController.text));
                     }
-                    // Escreve Password
                     if (c.uuid.str.toLowerCase() == UUID_PASS) {
                       await c.write(utf8.encode(_passController.text));
                     }
-                    // Escreve IP do Servidor
                     if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
                       String ipEnvio = _ipController.text;
                       if (!ipEnvio.contains(':')) ipEnvio += ":8080";
@@ -1492,18 +1502,15 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 }
               }
             } catch (e) {
-              // Se a ligação falhou, retira da lista para podermos tentar novamente
               configuredMacs.remove(mac);
             }
             
             isConnecting = false;
-            // Interrompe o loop para processar novo evento de scan de forma limpa
             break;
           }
         }
       });
 
-      // Aguarda 15 segundos para dar tempo de encontrar e processar as duas
       await Future.delayed(const Duration(seconds: 15));
       
       if (configuredCount < 2) {
@@ -1542,7 +1549,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                  style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
-            // Campo SSID
             TextField(
               controller: _ssidController,
               decoration: InputDecoration(
@@ -1554,7 +1560,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             ),
             const SizedBox(height: 15),
             
-            // Campo Password com Ícone de Olho
             TextField(
               controller: _passController,
               obscureText: _obscurePassword,
@@ -1575,7 +1580,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             
             const SizedBox(height: 15),
             
-            // Campo IP
             TextField(
               controller: _ipController,
               decoration: InputDecoration(
