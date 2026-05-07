@@ -282,6 +282,19 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               distExtraida = double.tryParse(item['distance'].toString()) ?? 0.0;
             }
 
+            List<int> bpmExtraidos = [];
+            var rawBpm = item['bpm_readings'];
+            if (rawBpm is List) {
+              bpmExtraidos = rawBpm.map((e) => (e as num).toInt()).toList();
+            } else if (rawBpm is String) {
+              try {
+                var decoded = jsonDecode(rawBpm);
+                if (decoded is List) bpmExtraidos = decoded.map((e) => (e as num).toInt()).toList();
+              } catch (_) {
+                bpmExtraidos = rawBpm.split(',').map((e) => int.tryParse(e) ?? 0).toList();
+              }
+            }
+
             listaFinal.add(ActivityData(
               id: item['time'],
               type: item['type'] ?? "Atividade",
@@ -292,6 +305,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               min: double.tryParse(item['temp_minima']?.toString() ?? "0") ?? 0.0,
               avg: double.tryParse(item['temp_media']?.toString() ?? "0") ?? 0.0,
               max: double.tryParse(item['temp_maxima']?.toString() ?? "0") ?? 0.0,
+              bpmReadings: bpmExtraidos,
             ));
           } catch (e) { print("Erro ao processar item do histórico: $e"); }
         }
@@ -1100,19 +1114,30 @@ class ActivityDetailScreen extends StatelessWidget {
     LatLngBounds? routeBounds;
     if (activity.route.length >= 2) routeBounds = LatLngBounds.fromPoints(activity.route);
 
+    // Cálculos BPM
+    final List<int> validBpms = activity.bpmReadings.where((b) => b > 0).toList();
+    final int bpmMin = validBpms.isNotEmpty ? validBpms.reduce((a, b) => a < b ? a : b) : 0;
+    final int bpmMax = validBpms.isNotEmpty ? validBpms.reduce((a, b) => a > b ? a : b) : 0;
+    final double bpmAvg = validBpms.isNotEmpty ? validBpms.reduce((a, b) => a + b) / validBpms.length : 0.0;
+
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         appBar: AppBar(
           title: Text(activity.type),
           bottom: const TabBar(
             indicatorColor: AppColors.primary,
-            tabs: [Tab(icon: Icon(Icons.thermostat), text: "Temperatura"), Tab(icon: Icon(Icons.map_outlined), text: "Percurso")],
+            tabs: [
+              Tab(icon: Icon(Icons.thermostat), text: "Temperatura"),
+              Tab(icon: Icon(Icons.map_outlined), text: "Percurso"),
+              Tab(icon: Icon(Icons.favorite), text: "BPM"),
+            ],
           ),
         ),
         body: TabBarView(
           physics: const NeverScrollableScrollPhysics(),
           children: [
+            // ABA TEMPERATURA
             Column(
               children: [
                 Padding(padding: const EdgeInsets.all(20), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_detBox("MIN", "${activity.min.toStringAsFixed(1)}°"), _detBox("AVG", "${activity.avg.toStringAsFixed(1)}°"), _detBox("MAX", "${activity.max.toStringAsFixed(1)}°")])),
@@ -1160,6 +1185,7 @@ class ActivityDetailScreen extends StatelessWidget {
                 const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10))),
               ],
             ),
+            // ABA PERCURSO
             Column(
               children: [
                 Expanded(
@@ -1185,8 +1211,91 @@ class ActivityDetailScreen extends StatelessWidget {
                 const SizedBox(height: 20),
               ],
             ),
+            // ABA BPM
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: validBpms.isEmpty
+                  ? const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.favorite_border, color: Colors.white24, size: 60),
+                          SizedBox(height: 16),
+                          Text(
+                            "Sem dados de BPM gravados",
+                            style: TextStyle(color: Colors.white38, fontSize: 16),
+                          ),
+                        ],
+                      ),
+                    )
+                  : Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(height: 20),
+                        _bpmStatCard(
+                          label: "BPM MÍNIMO",
+                          value: "$bpmMin bpm",
+                          icon: Icons.arrow_downward_rounded,
+                          color: AppColors.primary,
+                        ),
+                        const SizedBox(height: 20),
+                        _bpmStatCard(
+                          label: "BPM MÉDIO",
+                          value: "${bpmAvg.toStringAsFixed(1)} bpm",
+                          icon: Icons.show_chart_rounded,
+                          color: AppColors.secondary,
+                        ),
+                        const SizedBox(height: 20),
+                        _bpmStatCard(
+                          label: "BPM MÁXIMO",
+                          value: "$bpmMax bpm",
+                          icon: Icons.arrow_upward_rounded,
+                          color: AppColors.danger,
+                        ),
+                      ],
+                    ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _bpmStatCard({required String label, required String value, required IconData icon, required Color color}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(25),
+        border: Border.all(color: color.withOpacity(0.3), width: 1.5),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 28),
+          ),
+          const SizedBox(width: 20),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(color: Colors.white38, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                value,
+                style: TextStyle(color: color, fontSize: 32, fontWeight: FontWeight.w900),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1199,7 +1308,8 @@ class ActivityDetailScreen extends StatelessWidget {
 class ActivityData {
   final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
   final List<LatLng> route; final double distance;
-  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
+  final List<int> bpmReadings;
+  ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0, this.bpmReadings = const []});
 }
 
 ////////////////////////////////////////////////////
