@@ -1,20 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:math'; // NOVO: Para cálculos matemáticos do sensor
-import 'dart:ui' as ui; // NOVO: Para efeitos de blur e desenho térmico
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; 
-import 'package:url_launcher/url_launcher.dart'; 
+import 'package:flutter/services.dart'; // Para o Alerta Sonoro e Vibração
+import 'package:url_launcher/url_launcher.dart'; // Para ligar para o número
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_map/flutter_map.dart'; 
 import 'package:latlong2/latlong.dart'; 
 import 'package:shared_preferences/shared_preferences.dart'; 
-import 'package:mobile_scanner/mobile_scanner.dart'; 
-import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
+import 'package:mobile_scanner/mobile_scanner.dart'; // Para o Leitor de QR Code
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // FASE 3: Para o Bluetooth
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -325,6 +323,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
+      // ABA 0: CONFIGURAÇÕES (NOVA COM LEITOR QR)
       Center(
         child: ElevatedButton.icon(
           onPressed: () {
@@ -339,6 +338,8 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
           ),
         ),
       ),
+      
+      // ABA 1: DASHBOARD
       Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -362,6 +363,8 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
           ],
         ),
       ),
+      
+      // ABA 2: HISTÓRICO
       RefreshIndicator(
         onRefresh: buscarHistoricoDoPC,
         child: ActivityLogScreen(activities: activitiesList, onRefresh: buscarHistoricoDoPC),
@@ -463,17 +466,16 @@ class _MonitorScreenState extends State<MonitorScreen> {
   int seconds = 0;
   bool showThermal = false; 
   bool showMap = false; 
-  
-  // NOVO: Array que vai guardar os píxeis vindos diretamente da ESP32-CAM
-  List<double> rawThermalPixels = [];
-
+  Uint8List? imageBytes;
   final MapController _mapController = MapController();
 
   bool isShowingFallAlert = false;
+
   String proximityStatus = "CAMINHO_LIVRE";
   bool blinkState = true;
   Timer? blinkTimer;
 
+  // --- NOVAS VARIÁVEIS ECG / BPM ---
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -521,6 +523,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     super.dispose();
   }
 
+  // Dispara o piscar do coração quando recebe BPM novo
   void _triggerHeartBlink() {
     heartBlinkTimer?.cancel();
     setState(() => heartBlinkState = true);
@@ -535,57 +538,41 @@ class _MonitorScreenState extends State<MonitorScreen> {
       await client!.connect();
       setState(() => connected = true);
       client!.subscribe('heartbox/sensor/thermal', MqttQos.atMostOnce);
-      client!.subscribe('heartbox/cam/thermal_raw', MqttQos.atMostOnce); // NOVO TÓPICO
+      client!.subscribe('heartbox/cam/image', MqttQos.atMostOnce);
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
+      // NOVOS TÓPICOS ECG E BPM
       client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
       client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
       client!.updates?.listen((c) {
         final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
         final String topic = c[0].topic;
-
-        if (!mounted || isPaused) return;
-
-        // =========================================================
-        // NOVO: PROCESSAMENTO DA MATRIZ TÉRMICA DIRETAMENTE AQUI
-        // =========================================================
-        if (topic == 'heartbox/cam/thermal_raw') {
-          if (showThermal) {
-            final List<int> rawBytes = recMess.payload.message;
-            if (rawBytes.length == 3072) { // 768 pixels * 4 bytes (float)
-              // Conversão segura e direta de binário (bytes) para Floats!
-              ByteData byteData = Uint8List.fromList(rawBytes).buffer.asByteData();
-              List<double> tempPixels = [];
-              for(int i = 0; i < 3072; i += 4) {
-                tempPixels.add(byteData.getFloat32(i, Endian.little));
-              }
-              setState(() => rawThermalPixels = tempPixels);
-            }
-          }
-          return; // Para não tentar converter bytes binários em String abaixo
-        }
-
-        // Para os restantes tópicos de texto
         final String payload = String.fromCharCodes(recMess.payload.message);
 
+        if (!mounted) return;
+
         if (topic == 'heartbox/sensor/proximity') {
-          setState(() => proximityStatus = payload.trim());
+          setState(() {
+            proximityStatus = payload.trim();
+          });
         }
-        else if (topic == 'heartbox/alerts/fall' && payload.contains("ALERTA")) {
+
+        if (topic == 'heartbox/alerts/fall' && payload.contains("ALERTA")) {
             SystemSound.play(SystemSoundType.alert);
             HapticFeedback.heavyImpact();
             _mostrarAlertaQueda();
         }
-        else if (topic == 'heartbox/sensor/thermal') {
-          setState(() {
+
+        if (isPaused) return;
+        setState(() {
+          if (topic == 'heartbox/sensor/thermal') {
             currentTemp = double.tryParse(payload) ?? currentTemp;
             allTemps.add(currentTemp);
-          });
-        } 
-        else if (topic == 'heartbox/gps/coords') {
-          setState(() {
+          } else if (topic == 'heartbox/cam/image' && showThermal) {
+            imageBytes = base64Decode(payload);
+          } else if (topic == 'heartbox/gps/coords') {
             if (payload == "Sem sinal GPS" || payload.contains("não detetado") || payload.isEmpty) {
               hasGpsSignal = false;
             } else {
@@ -609,24 +596,19 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 hasGpsSignal = false;
               }
             }
-          });
-        } 
-        else if (topic == 'heartbox/heart/ecg') {
-          setState(() {
+          } else if (topic == 'heartbox/heart/ecg') {
+            // ACUMULA PONTOS ECG PARA O GRÁFICO (janela deslizante)
             double val = double.tryParse(payload) ?? 0.0;
             ecgPoints.add(val);
             if (ecgPoints.length > ecgMaxPoints) {
               ecgPoints.removeAt(0);
             }
-          });
-        } 
-        else if (topic == 'heartbox/heart/bpm') {
-          setState(() {
+          } else if (topic == 'heartbox/heart/bpm') {
             int newBpm = int.tryParse(payload) ?? 0;
             currentBpm = newBpm;
             if (newBpm > 0) _triggerHeartBlink();
-          });
-        }
+          }
+        });
       });
     } catch (e) { print(e); }
   }
@@ -634,20 +616,45 @@ class _MonitorScreenState extends State<MonitorScreen> {
   void _mostrarAlertaQueda() {
     if (isShowingFallAlert) return;
     isShowingFallAlert = true;
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.danger,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(children: [Icon(Icons.warning_amber_rounded, color: Colors.white, size: 30), SizedBox(width: 10), Text("QUEDA DETETADA!", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))]),
-        content: const Text("Precisa de ajuda?", style: TextStyle(color: Colors.white, fontSize: 18), textAlign: TextAlign.center),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.white, size: 30),
+            SizedBox(width: 10),
+            Text("QUEDA DETETADA!", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          "Precisa de ajuda?",
+          style: TextStyle(color: Colors.white, fontSize: 18),
+          textAlign: TextAlign.center,
+        ),
         actions: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              TextButton(style: TextButton.styleFrom(backgroundColor: Colors.white.withOpacity(0.2)), onPressed: () { isShowingFallAlert = false; Navigator.pop(ctx); }, child: const Text("NÃO", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-              ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppColors.danger), onPressed: () { Navigator.pop(ctx); _mostrarDialogoLigar112(); }, child: const Text("SIM", style: TextStyle(fontWeight: FontWeight.bold))),
+              TextButton(
+                style: TextButton.styleFrom(backgroundColor: Colors.white.withOpacity(0.2)),
+                onPressed: () {
+                  isShowingFallAlert = false;
+                  Navigator.pop(ctx);
+                },
+                child: const Text("NÃO", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppColors.danger),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _mostrarDialogoLigar112();
+                },
+                child: const Text("SIM", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
             ],
           )
         ],
@@ -664,8 +671,25 @@ class _MonitorScreenState extends State<MonitorScreen> {
         title: const Text("Emergência"),
         content: const Text("Precisa de ligar ao 112?"),
         actions: [
-          TextButton(onPressed: () { isShowingFallAlert = false; Navigator.pop(ctx); }, child: const Text("NÃO")),
-          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger), onPressed: () async { isShowingFallAlert = false; Navigator.pop(ctx); final Uri url = Uri.parse('tel:960254309'); if (await canLaunchUrl(url)) { await launchUrl(url); } }, child: const Text("SIM")),
+          TextButton(
+            onPressed: () {
+              isShowingFallAlert = false;
+              Navigator.pop(ctx);
+            },
+            child: const Text("NÃO"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () async {
+              isShowingFallAlert = false;
+              Navigator.pop(ctx);
+              final Uri url = Uri.parse('tel:960254309');
+              if (await canLaunchUrl(url)) {
+                await launchUrl(url);
+              }
+            },
+            child: const Text("SIM"),
+          ),
         ],
       ),
     );
@@ -971,7 +995,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
   Widget _buildProximityBox() {
     bool isDanger = proximityStatus == "OBSTACULO_PERTO";
-    Color iconColor = isDanger ? (blinkState ? AppColors.danger : Colors.black) : AppColors.success;
+    Color iconColor = isDanger 
+        ? (blinkState ? AppColors.danger : Colors.black) 
+        : AppColors.success;
     String label = isDanger ? "Perigo!" : "Livre!";
 
     return Expanded(
@@ -995,47 +1021,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // =========================================================
-  // NOVO: DESENHA A IMAGEM TÉRMICA USANDO MOTOR DO FLUTTER
-  // =========================================================
-  Widget _buildThermalWidget() {
-    if (rawThermalPixels.isEmpty) return const Center(child: Text("A aguardar câmara térmica..."));
-
-    // Lógica do teu Python (Filtro e Limpeza)
-    List<double> valid = rawThermalPixels.where((t) => t > 10 && t < 40).toList();
-    double tAvg = valid.isNotEmpty ? valid.reduce((a, b) => a + b) / valid.length : 25.0;
-    
-    // np.where((matriz < 15) | (matriz > 50), t_avg, matriz)
-    List<double> cleanedPixels = rawThermalPixels.map((t) => (t < 15 || t > 50) ? tAvg : t).toList();
-    
-    double tMin = cleanedPixels.reduce(min);
-    double tMax = cleanedPixels.reduce(max);
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(25),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // O Blur Gaussiano como o do cv2 (cv2.GaussianBlur)
-          ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0), 
-            child: CustomPaint(
-              painter: ThermalPainter(pixels: cleanedPixels, minTemp: tMin, maxTemp: tMax),
-            ),
-          ),
-          Positioned(
-            bottom: 10, left: 10,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), borderRadius: BorderRadius.circular(10)),
-              child: Text("Mín: ${tMin.toStringAsFixed(1)}°C | Méd: ${tAvg.toStringAsFixed(1)}°C | Máx: ${tMax.toStringAsFixed(1)}°C", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
-            ),
-          )
-        ],
-      ),
-    );
-  }
-
+  Widget _buildThermalWidget() => imageBytes != null ? Image.memory(imageBytes!, fit: BoxFit.contain, gaplessPlayback: true) : const Center(child: Text("A aguardar vídeo..."));
   Widget _buildMiniBox(String l, String v, IconData i) => Expanded(child: Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)), child: Row(children: [Icon(i, color: AppColors.primary, size: 20), const SizedBox(width: 12), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(l, style: const TextStyle(color: Colors.white38, fontSize: 11)), Text(v, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))])])));
   Widget _buildGPSStatusBox() => Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20)), child: Row(children: [const Icon(Icons.gps_fixed, color: AppColors.success, size: 18), const SizedBox(width: 15), Text("GPS | Dist: ${distance.toStringAsFixed(0)}m", style: const TextStyle(fontFamily: 'monospace', fontSize: 14, fontWeight: FontWeight.bold))]));
   String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
@@ -1216,14 +1202,19 @@ class ActivityData {
   ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0});
 }
 
+////////////////////////////////////////////////////
+/// 📷 ECRÃ DO LEITOR DE QR CODE (FASE 2)
+////////////////////////////////////////////////////
 class QRScannerScreen extends StatefulWidget {
   const QRScannerScreen({super.key});
+
   @override
   State<QRScannerScreen> createState() => _QRScannerScreenState();
 }
 
 class _QRScannerScreenState extends State<QRScannerScreen> {
   bool isScanning = true;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1236,11 +1227,16 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
           MobileScanner(
             onDetect: (capture) {
               if (!isScanning) return;
+              
               final List<Barcode> barcodes = capture.barcodes;
               for (final barcode in barcodes) {
                 if (barcode.rawValue != null) {
                   setState(() => isScanning = false); 
+                  
                   String qrContent = barcode.rawValue!;
+                  print("QR Lido: $qrContent");
+
+                  // Salta para o formulário passando o texto lido (THERMAL_CAM)
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(builder: (_) => WifiConfigScreen(targetName: qrContent)),
@@ -1251,13 +1247,23 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
           ),
           Center(
             child: Container(
-              width: 250, height: 250,
-              decoration: BoxDecoration(border: Border.all(color: AppColors.primary, width: 4), borderRadius: BorderRadius.circular(20)),
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.primary, width: 4),
+                borderRadius: BorderRadius.circular(20),
+              ),
             ),
           ),
           const Positioned(
-            bottom: 50, left: 0, right: 0,
-            child: Text("Aponte para o QR Code da caixa", textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            bottom: 50,
+            left: 0,
+            right: 0,
+            child: Text(
+              "Aponte para o QR Code da caixa",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            ),
           )
         ],
       ),
@@ -1265,9 +1271,13 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
   }
 }
 
+////////////////////////////////////////////////////
+/// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
+////////////////////////////////////////////////////
 class WifiConfigScreen extends StatefulWidget {
-  final String targetName;
+  final String targetName; // Recebe o nome lido do QR Code (ex: THERMAL_CAM)
   const WifiConfigScreen({super.key, required this.targetName});
+
   @override
   State<WifiConfigScreen> createState() => _WifiConfigScreenState();
 }
@@ -1278,9 +1288,10 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   late final TextEditingController _ipController;
   
   bool isSending = false;
-  bool _obscurePassword = true; 
+  bool _obscurePassword = true; // Controla se a pass está oculta
   String statusMessage = "Preencha os dados e clique em Enviar";
 
+  // UUIDs de Configuração (Conforme definido no main.dart)
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
   final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
@@ -1293,23 +1304,29 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   }
 
   Future<void> _enviarDadosBLE() async {
-    await SessionManager.setServerIp(_ipController.text); 
+    await SessionManager.setServerIp(_ipController.text); // Guarda o IP configurado globalmente
+    
     setState(() {
       isSending = true;
       statusMessage = "A procurar as placas (${widget.targetName})...";
     });
 
     try {
+      // Inicia o varrimento Bluetooth
       FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+
       int configuredCount = 0;
       Set<String> configuredMacs = {};
       bool isConnecting = false;
       
       var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        // Evita que tente ligar a várias placas em simultâneo e encrave
         if (isConnecting) return;
 
         for (ScanResult r in results) {
           String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
+          
+          // Usa 'contains' para garantir que apanha as duas placas caso o nome varie ligeiramente
           if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
             String mac = r.device.remoteId.str;
             if (configuredMacs.contains(mac)) continue;
@@ -1321,23 +1338,35 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             
             try {
               await r.device.connect(timeout: const Duration(seconds: 5));
+              
               List<BluetoothService> services = await r.device.discoverServices();
               for (var service in services) {
                 if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
                   for (var c in service.characteristics) {
-                    if (c.uuid.str.toLowerCase() == UUID_SSID) await c.write(utf8.encode(_ssidController.text));
-                    if (c.uuid.str.toLowerCase() == UUID_PASS) await c.write(utf8.encode(_passController.text));
+                    // Escreve SSID
+                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
+                      await c.write(utf8.encode(_ssidController.text));
+                    }
+                    // Escreve Password
+                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
+                      await c.write(utf8.encode(_passController.text));
+                    }
+                    // Escreve IP do Servidor
                     if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
                       String ipEnvio = _ipController.text;
-                      if (!ipEnvio.contains(':')) ipEnvio += ":8080"; // A remover no futuro com HiveMQ
+                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
                       await c.write(utf8.encode(ipEnvio));
                     }
                   }
                 }
               }
+
               await r.device.disconnect();
               configuredCount++;
-              if (mounted) setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
+              
+              if (mounted) {
+                setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
+              }
 
               if (configuredCount >= 2) {
                 FlutterBluePlus.stopScan();
@@ -1346,32 +1375,47 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                     statusMessage = "✅ Sucesso! As duas placas foram configuradas.";
                     isSending = false;
                   });
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
+                  );
                   Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
                 }
               }
             } catch (e) {
+              // Se a ligação falhou, retira da lista para podermos tentar novamente
               configuredMacs.remove(mac);
             }
+            
             isConnecting = false;
+            // Interrompe o loop para processar novo evento de scan de forma limpa
             break;
           }
         }
       });
 
+      // Aguarda 15 segundos para dar tempo de encontrar e processar as duas
       await Future.delayed(const Duration(seconds: 15));
+      
       if (configuredCount < 2) {
         FlutterBluePlus.stopScan();
         if (mounted) {
           setState(() {
             isSending = false;
-            statusMessage = configuredCount == 1 ? "⚠️ Apenas 1 placa configurada. Tente de novo." : "❌ Nenhuma placa encontrada.";
+            statusMessage = configuredCount == 1 
+                ? "⚠️ Apenas 1 placa foi configurada. Tente de novo." 
+                : "❌ Nenhuma placa foi encontrada.";
           });
         }
       }
       subscription.cancel();
+
     } catch (e) {
-      if (mounted) setState(() { isSending = false; statusMessage = "❌ Falha na comunicação Bluetooth."; });
+      if (mounted) {
+        setState(() {
+          isSending = false;
+          statusMessage = "❌ Falha na comunicação Bluetooth.";
+        });
+      }
     }
   }
 
@@ -1384,80 +1428,83 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Alvo: ${widget.targetName}", style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+            Text("Alvo: ${widget.targetName}", 
+                 style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
-            TextField(controller: _ssidController, decoration: InputDecoration(labelText: "Nome da Rede Wi-Fi (SSID)", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
+            
+            // Campo SSID
+            TextField(
+              controller: _ssidController,
+              decoration: InputDecoration(
+                labelText: "Nome da Rede Wi-Fi (SSID)", 
+                filled: true, 
+                fillColor: AppColors.surface, 
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
+              ),
+            ),
             const SizedBox(height: 15),
+            
+            // Campo Password com Ícone de Olho
             TextField(
               controller: _passController,
               obscureText: _obscurePassword,
               decoration: InputDecoration(
-                labelText: "Password do Wi-Fi", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
-                suffixIcon: IconButton(icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: Colors.white60), onPressed: () => setState(() => _obscurePassword = !_obscurePassword)),
+                labelText: "Password do Wi-Fi", 
+                filled: true, 
+                fillColor: AppColors.surface, 
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                    color: Colors.white60,
+                  ),
+                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                ),
               ),
             ),
+            
             const SizedBox(height: 15),
-            TextField(controller: _ipController, decoration: InputDecoration(labelText: "IP do Computador", filled: true, fillColor: AppColors.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
+            
+            // Campo IP
+            TextField(
+              controller: _ipController,
+              decoration: InputDecoration(
+                labelText: "IP do Computador", 
+                filled: true, 
+                fillColor: AppColors.surface, 
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
+              ),
+            ),
+            
             const SizedBox(height: 40),
+            
             SizedBox(
-              width: double.infinity, height: 60,
+              width: double.infinity,
+              height: 60,
               child: ElevatedButton(
                 onPressed: isSending ? null : _enviarDadosBLE,
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
-                child: isSending ? const CircularProgressIndicator(color: Colors.black) : const Text("ENVIAR PARA AS PLACAS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary, 
+                  foregroundColor: Colors.black, 
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                ),
+                child: isSending 
+                    ? const CircularProgressIndicator(color: Colors.black) 
+                    : const Text("ENVIAR PARA AS PLACAS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               ),
             ),
+            
             const SizedBox(height: 30),
-            Center(child: Text(statusMessage, textAlign: TextAlign.center, style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70))),
+            Center(
+              child: Text(
+                statusMessage, 
+                textAlign: TextAlign.center, 
+                style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70)
+              )
+            ),
           ],
         ),
       ),
     );
   }
-}
-
-// =========================================================
-// NOVO: CLASSE QUE PINTA OS QUADRADINHOS DO SENSOR NO ECRÃ
-// =========================================================
-class ThermalPainter extends CustomPainter {
-  final List<double> pixels;
-  final double minTemp;
-  final double maxTemp;
-
-  ThermalPainter({required this.pixels, required this.minTemp, required this.maxTemp});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (pixels.length != 768) return;
-    
-    // O sensor é de 32 de largura por 24 de altura
-    double cellW = size.width / 32;
-    double cellH = size.height / 24;
-    
-    for (int y = 0; y < 24; y++) {
-      for (int x = 0; x < 32; x++) {
-        double temp = pixels[y * 32 + x];
-        // Aplica a cor do nosso mapa "Jet" baseado na temperatura
-        final paint = Paint()..color = _getJetColor(temp, minTemp, maxTemp);
-        // Desenha o píxel no ecrã
-        canvas.drawRect(Rect.fromLTWH(x * cellW, y * cellH, cellW, cellH), paint);
-      }
-    }
-  }
-
-  // Lógica OpenCV COLORMAP_JET convertida para Flutter
-  Color _getJetColor(double value, double min, double max) {
-    if (max <= min) return Colors.blue;
-    double v = (value - min) / (max - min); // Normaliza entre 0 e 1
-    
-    // Matemática pura para converter um valor num espectro térmico (Azul -> Verde -> Amarelo -> Vermelho)
-    double r = ui.clampDouble(1.5 - (v - 0.75).abs() * 4, 0.0, 1.0);
-    double g = ui.clampDouble(1.5 - (v - 0.5).abs() * 4, 0.0, 1.0);
-    double b = ui.clampDouble(1.5 - (v - 0.25).abs() * 4, 0.0, 1.0);
-    
-    return Color.fromARGB(255, (r * 255).round(), (g * 255).round(), (b * 255).round());
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
