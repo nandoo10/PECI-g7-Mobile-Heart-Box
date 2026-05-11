@@ -1393,8 +1393,18 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
 }
 
 ////////////////////////////////////////////////////
-/// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
+/// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE
 ////////////////////////////////////////////////////
+
+// Representa o resultado de tentativa de configuração/comando para uma placa
+class _BoardResult {
+  final String mac;
+  final String name;
+  final bool success;
+  final String? errorMsg;
+  _BoardResult({required this.mac, required this.name, required this.success, this.errorMsg});
+}
+
 class WifiConfigScreen extends StatefulWidget {
   final String targetName;
   const WifiConfigScreen({super.key, required this.targetName});
@@ -1410,12 +1420,19 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   
   bool isSending = false;
   bool _obscurePassword = true;
-  String statusMessage = "Preencha os dados e clique em Enviar\nOu utilize os botões rápidos de Controlo";
+
+  // Estado de progresso visível ao utilizador
+  String _statusTitle = "";
+  String _statusDetail = "";
+  bool _isError = false;
 
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
-  final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
-  final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
+  final String UUID_SSID    = "ab35e54e-fde4-4f83-902a-07785de547b9";
+  final String UUID_PASS    = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
   final String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
+
+  // Nomes BLE conhecidos das placas
+  static const List<String> _boardBleNames = ["THERMAL_CAM"];
 
   @override
   void initState() {
@@ -1423,198 +1440,235 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     _ipController = TextEditingController(text: SessionManager.serverIp);
   }
 
-  // --- Função para emitir os comandos diretos via BLE ---
-  Future<void> _enviarComandoBLE(String comando) async {
+  void _setStatus(String title, String detail, {bool error = false}) {
+    if (!mounted) return;
     setState(() {
-      isSending = true;
-      statusMessage = "A procurar placas via Bluetooth para comando $comando...";
+      _statusTitle = title;
+      _statusDetail = detail;
+      _isError = error;
     });
+  }
 
+  /// Verifica se o nome do dispositivo BLE corresponde a uma das nossas placas
+  bool _isBoardDevice(String devName) {
+    for (final knownName in _boardBleNames) {
+      if (devName.contains(knownName) || devName.contains(widget.targetName)) return true;
+    }
+    return false;
+  }
+
+  /// Executa uma operação numa placa já conectada.
+  /// Retorna null se OK, ou mensagem de erro se falhou.
+  Future<String?> _operateOnBoard(BluetoothDevice device, Future<void> Function(List<BluetoothService> services) operation) async {
     try {
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
-      int configuredCount = 0;
-      Set<String> configuredMacs = {};
-      bool isConnecting = false;
-      
-      var subscription = FlutterBluePlus.scanResults.listen((results) async {
-        if (isConnecting) return;
-        for (ScanResult r in results) {
-          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
-          
-          if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
-            String mac = r.device.remoteId.str;
-            if (configuredMacs.contains(mac)) continue;
-            
-            isConnecting = true;
-            configuredMacs.add(mac);
-            setState(() => statusMessage = "Placa encontrada. A enviar comando ($mac)...");
-            
-            try {
-              await r.device.connect(timeout: const Duration(seconds: 5));
-              List<BluetoothService> services = await r.device.discoverServices();
-              for (var service in services) {
-                if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
-                  for (var c in service.characteristics) {
-                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
-                      // Usamos a caraterística de SSID para receber o comando especial de RESET ou ON
-                      await c.write(utf8.encode(comando));
-                    }
-                  }
-                }
-              }
-              await r.device.disconnect();
-              configuredCount++;
-              
-              if (mounted) setState(() => statusMessage = "✅ Comando enviado: $configuredCount/2 placas");
-
-              if (configuredCount >= 2) {
-                FlutterBluePlus.stopScan();
-                if (mounted) {
-                  setState(() {
-                    statusMessage = "✅ Sucesso! Comando Bluetooth enviado a todas as placas.";
-                    isSending = false;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Ação $comando realizada com sucesso!"), backgroundColor: AppColors.success));
-                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
-                }
-              }
-            } catch (e) {
-              configuredMacs.remove(mac);
-            }
-            isConnecting = false;
-            break;
-          }
-        }
-      });
-
-      await Future.delayed(const Duration(seconds: 15));
-      
-      if (configuredCount < 2) {
-        FlutterBluePlus.stopScan();
-        if (mounted) {
-          setState(() {
-            isSending = false;
-            if (configuredCount == 0) {
-              statusMessage = "✅ As placas já estão conectadas à rede Wi-Fi ou desligadas!";
-            } else {
-              statusMessage = "⚠️ Comando recebido em 1 placa. A outra já deve estar conectada/desligada.";
-            }
-          });
-        }
-      }
-      subscription.cancel();
+      await device.connect(timeout: const Duration(seconds: 6));
+      final services = await device.discoverServices();
+      await operation(services);
+      await device.disconnect();
+      return null;
     } catch (e) {
-      if (mounted) setState(() { isSending = false; statusMessage = "❌ Falha na comunicação Bluetooth."; });
+      try { await device.disconnect(); } catch (_) {}
+      return e.toString();
     }
   }
 
-  Future<void> _enviarDadosBLE() async {
-    await SessionManager.setServerIp(_ipController.text);
-    
-    setState(() {
-      isSending = true;
-      statusMessage = "A procurar as placas (${widget.targetName})...";
-    });
-
-    try {
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 20));
-
-      int configuredCount = 0;
-      Set<String> configuredMacs = {};
-      bool isConnecting = false;
-      
-      var subscription = FlutterBluePlus.scanResults.listen((results) async {
-        if (isConnecting) return;
-
-        for (ScanResult r in results) {
-          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
-          
-          if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
-            String mac = r.device.remoteId.str;
-            if (configuredMacs.contains(mac)) continue;
-            
-            isConnecting = true;
-            configuredMacs.add(mac);
-
-            setState(() => statusMessage = "Placa encontrada. A configurar ($mac)...");
-            
-            try {
-              await r.device.connect(timeout: const Duration(seconds: 5));
-              
-              List<BluetoothService> services = await r.device.discoverServices();
-              for (var service in services) {
-                if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
-                  for (var c in service.characteristics) {
-                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
-                      await c.write(utf8.encode(_ssidController.text));
-                    }
-                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
-                      await c.write(utf8.encode(_passController.text));
-                    }
-                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                      String ipEnvio = _ipController.text;
-                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
-                      await c.write(utf8.encode(ipEnvio));
-                    }
-                  }
-                }
-              }
-
-              await r.device.disconnect();
-              configuredCount++;
-              
-              if (mounted) {
-                setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
-              }
-
-              if (configuredCount >= 2) {
-                FlutterBluePlus.stopScan();
-                if (mounted) {
-                  setState(() {
-                    statusMessage = "✅ Sucesso! As duas placas foram configuradas.";
-                    isSending = false;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
-                  );
-                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
-                }
-              }
-            } catch (e) {
-              configuredMacs.remove(mac);
-            }
-            
-            isConnecting = false;
-            break;
-          }
+  /// Encontra características dentro de um serviço pelo UUID
+  BluetoothCharacteristic? _findChar(List<BluetoothService> services, String serviceUuid, String charUuid) {
+    for (final svc in services) {
+      if (svc.uuid.str.toLowerCase() == serviceUuid.toLowerCase()) {
+        for (final c in svc.characteristics) {
+          if (c.uuid.str.toLowerCase() == charUuid.toLowerCase()) return c;
         }
-      });
-
-      await Future.delayed(const Duration(seconds: 20)); // Aumentei o tempo de scan
-      
-      if (configuredCount < 2) {
-        FlutterBluePlus.stopScan();
-        if (mounted) {
-          setState(() {
-            isSending = false;
-            if (configuredCount == 0) {
-              statusMessage = "✅ As placas já estão conectadas à rede Wi-Fi!";
-            } else {
-              statusMessage = "⚠️ Apenas 1 placa foi configurada. A outra já deve estar conectada.";
-            }
-          });
-        }
-      }
-      subscription.cancel();
-
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          isSending = false;
-          statusMessage = "❌ Falha na comunicação Bluetooth.";
-        });
       }
     }
+    return null;
+  }
+
+  /// Scan BLE por [scanSeconds] e retorna todos os dispositivos que correspondem às placas.
+  /// Inclui também dispositivos já pareados/em cache que correspondam.
+  Future<List<ScanResult>> _scanForBoards(int scanSeconds) async {
+    final found = <String, ScanResult>{};
+
+    final completer = Completer<void>();
+    StreamSubscription? sub;
+
+    sub = FlutterBluePlus.scanResults.listen((results) {
+      for (final r in results) {
+        final name = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
+        if (_isBoardDevice(name) && !found.containsKey(r.device.remoteId.str)) {
+          found[r.device.remoteId.str] = r;
+        }
+      }
+    });
+
+    await FlutterBluePlus.startScan(timeout: Duration(seconds: scanSeconds));
+    await Future.delayed(Duration(seconds: scanSeconds));
+    await FlutterBluePlus.stopScan();
+    sub.cancel();
+
+    return found.values.toList();
+  }
+
+  // ─── ENVIAR CREDENCIAIS WI-FI ─────────────────────────────────────────────
+  Future<void> _enviarDadosBLE() async {
+    await SessionManager.setServerIp(_ipController.text);
+
+    setState(() { isSending = true; _isError = false; });
+    _setStatus("A procurar placas...", "A fazer scan Bluetooth (15s)");
+
+    final boards = await _scanForBoards(15);
+
+    if (boards.isEmpty) {
+      // Nenhuma placa encontrada em modo BLE → já estão todas ligadas ao Wi-Fi
+      _setStatus(
+        "✅ Placas já ligadas à rede",
+        "Nenhuma placa encontrada em modo Bluetooth.\nAs placas já estão ligadas ao access point configurado.",
+      );
+      setState(() => isSending = false);
+      return;
+    }
+
+    // Tenta configurar cada placa encontrada
+    final results = <_BoardResult>[];
+    for (final board in boards) {
+      final name = board.device.advName.isNotEmpty ? board.device.advName : board.advertisementData.advName;
+      _setStatus("A configurar placa...", "MAC: ${board.device.remoteId.str}");
+
+      final err = await _operateOnBoard(board.device, (services) async {
+        final ssidChar   = _findChar(services, SERVICE_UUID, UUID_SSID);
+        final passChar   = _findChar(services, SERVICE_UUID, UUID_PASS);
+        final ipChar     = _findChar(services, SERVICE_UUID, UUID_SERVERIP);
+
+        if (ssidChar == null || passChar == null || ipChar == null) {
+          throw Exception("Características BLE não encontradas");
+        }
+
+        await ssidChar.write(utf8.encode(_ssidController.text));
+        await passChar.write(utf8.encode(_passController.text));
+
+        String ipEnvio = _ipController.text;
+        if (!ipEnvio.contains(':')) ipEnvio += ":8080";
+        await ipChar.write(utf8.encode(ipEnvio));
+      });
+
+      results.add(_BoardResult(
+        mac: board.device.remoteId.str,
+        name: name.isNotEmpty ? name : "Placa",
+        success: err == null,
+        errorMsg: err,
+      ));
+    }
+
+    // Compõe mensagem de resultado detalhada
+    final succeeded = results.where((r) => r.success).toList();
+    final failed    = results.where((r) => !r.success).toList();
+
+    String title;
+    String detail;
+    bool isErr = false;
+
+    if (succeeded.isEmpty) {
+      title = "❌ Falha na configuração";
+      detail = "Nenhuma placa foi configurada com sucesso.\n"
+          + failed.map((r) => "• ${r.name} (${r.mac}): ${r.errorMsg}").join("\n");
+      isErr = true;
+    } else if (failed.isEmpty) {
+      title = succeeded.length == 1
+          ? "✅ 1 placa configurada com sucesso"
+          : "✅ ${succeeded.length} placas configuradas com sucesso";
+      detail = succeeded.map((r) => "• ${r.name} (${r.mac})").join("\n");
+    } else {
+      title = "⚠️ Configuração parcial";
+      detail = "Sucesso (${succeeded.length}):\n"
+          + succeeded.map((r) => "• ${r.name} (${r.mac})").join("\n")
+          + "\n\nFalha (${failed.length}):\n"
+          + failed.map((r) => "• ${r.name} (${r.mac}): ${r.errorMsg}").join("\n");
+      isErr = true;
+    }
+
+    _setStatus(title, detail, error: isErr);
+    setState(() => isSending = false);
+  }
+
+  // ─── ENVIAR COMANDO (ON / RESET) ──────────────────────────────────────────
+  Future<void> _enviarComandoBLE(String comando) async {
+    setState(() { isSending = true; _isError = false; });
+
+    final String labelComando = comando == "RESET" ? "DESLIGAR" : "LIGAR";
+    _setStatus("A procurar placas...", "A fazer scan Bluetooth (15s) para comando $labelComando");
+
+    final boards = await _scanForBoards(15);
+
+    if (boards.isEmpty) {
+      // Nenhuma placa em modo BLE
+      if (comando == "RESET") {
+        // Para RESET, se não estão em BLE, provavelmente já estão em Wi-Fi —
+        // não podemos desligá-las via BLE. Informa o utilizador.
+        _setStatus(
+          "⚠️ Placas não encontradas via Bluetooth",
+          "As placas parecem estar ligadas ao Wi-Fi e não estão acessíveis via Bluetooth.\n"
+          "Para as desligar, retire a alimentação ou ligue-se diretamente.",
+          error: true,
+        );
+      } else {
+        // Para ON: se não aparecem em BLE significa que já estão ligadas
+        _setStatus(
+          "✅ Placas já estão ligadas",
+          "Nenhuma placa encontrada em modo Bluetooth.\nAs placas já estão ativas e ligadas à rede.",
+        );
+      }
+      setState(() => isSending = false);
+      return;
+    }
+
+    final results = <_BoardResult>[];
+    for (final board in boards) {
+      final name = board.device.advName.isNotEmpty ? board.device.advName : board.advertisementData.advName;
+      _setStatus("A enviar comando $labelComando...", "MAC: ${board.device.remoteId.str}");
+
+      final err = await _operateOnBoard(board.device, (services) async {
+        // O comando ON/RESET é enviado na característica de SSID (conforme implementação existente no ESP32-S3)
+        final ssidChar = _findChar(services, SERVICE_UUID, UUID_SSID);
+        if (ssidChar == null) throw Exception("Característica SSID não encontrada");
+        await ssidChar.write(utf8.encode(comando));
+      });
+
+      results.add(_BoardResult(
+        mac: board.device.remoteId.str,
+        name: name.isNotEmpty ? name : "Placa",
+        success: err == null,
+        errorMsg: err,
+      ));
+    }
+
+    final succeeded = results.where((r) => r.success).toList();
+    final failed    = results.where((r) => !r.success).toList();
+
+    String title;
+    String detail;
+    bool isErr = false;
+
+    if (succeeded.isEmpty) {
+      title = "❌ Falha ao enviar comando";
+      detail = "O comando $labelComando não chegou a nenhuma placa.\n"
+          + failed.map((r) => "• ${r.name} (${r.mac}): ${r.errorMsg}").join("\n");
+      isErr = true;
+    } else if (failed.isEmpty) {
+      title = succeeded.length == 1
+          ? "✅ Comando $labelComando enviado a 1 placa"
+          : "✅ Comando $labelComando enviado a ${succeeded.length} placas";
+      detail = succeeded.map((r) => "• ${r.name} (${r.mac})").join("\n");
+    } else {
+      title = "⚠️ Comando parcialmente enviado";
+      detail = "Sucesso (${succeeded.length}):\n"
+          + succeeded.map((r) => "• ${r.name} (${r.mac})").join("\n")
+          + "\n\nFalha (${failed.length}):\n"
+          + failed.map((r) => "• ${r.name} (${r.mac}): ${r.errorMsg}").join("\n");
+      isErr = true;
+    }
+
+    _setStatus(title, detail, error: isErr);
+    setState(() => isSending = false);
   }
 
   @override
@@ -1626,7 +1680,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Alvo de Bluetooth: ${widget.targetName}", 
+            Text("Alvo Bluetooth: ${widget.targetName}", 
                  style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
@@ -1727,20 +1781,71 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             ),
             const SizedBox(height: 10),
             const Text(
-              "* DESLIGAR irá apagar o Wi-Fi e colocar as placas a dormir. "
-              "Só precisa do QR Code para usar estes botões.",
+              "* DESLIGAR apaga as credenciais Wi-Fi e coloca as placas a dormir.\n"
+              "* LIGAR reinicia as placas para modo de operação normal.\n"
+              "* Os botões só funcionam enquanto as placas estiverem em modo Bluetooth.",
               style: TextStyle(color: Colors.white24, fontSize: 11),
               textAlign: TextAlign.center,
             ),
 
             const SizedBox(height: 30),
-            Center(
-              child: Text(
-                statusMessage, 
-                textAlign: TextAlign.center, 
-                style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70)
-              )
-            ),
+
+            // ── Área de resultado ──────────────────────────────────────────
+            if (_statusTitle.isNotEmpty)
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: _isError
+                      ? AppColors.danger.withOpacity(0.12)
+                      : AppColors.success.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: _isError
+                        ? AppColors.danger.withOpacity(0.4)
+                        : AppColors.success.withOpacity(0.4),
+                    width: 1.5,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _statusTitle,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: _isError ? AppColors.danger : AppColors.success,
+                      ),
+                    ),
+                    if (_statusDetail.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _statusDetail,
+                        style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+            if (isSending) ...[
+              const SizedBox(height: 20),
+              Center(
+                child: Column(
+                  children: [
+                    const CircularProgressIndicator(color: AppColors.primary),
+                    const SizedBox(height: 12),
+                    Text(
+                      _statusDetail,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white54, fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
