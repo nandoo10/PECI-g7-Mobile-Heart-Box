@@ -3,16 +3,16 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Para o Alerta Sonoro e Vibração
-import 'package:url_launcher/url_launcher.dart'; // Para ligar para o número
+import 'package:flutter/services.dart'; 
+import 'package:url_launcher/url_launcher.dart'; 
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_map/flutter_map.dart'; 
 import 'package:latlong2/latlong.dart'; 
 import 'package:shared_preferences/shared_preferences.dart'; 
-import 'package:mobile_scanner/mobile_scanner.dart'; // Para o Leitor de QR Code
-import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // FASE 3: Para o Bluetooth
+import 'package:mobile_scanner/mobile_scanner.dart'; 
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,12 +29,12 @@ class SessionManager {
   static String activityType = "Caminhada";
   static DateTime? startTime; 
   static List<double> temps = [];
-  static List<int> bpms = []; // ✅ NOVO: lista de BPMs da sessão
+  static List<int> bpms = []; 
   static double lastLat = 39.3999;
   static double lastLon = -8.2245;
   static List<LatLng> route = [];
   static double distance = 0.0;
-  static String serverIp = ""; // IP dinâmico
+  static String serverIp = ""; 
 
   static Future<void> init() async {
     prefs = await SharedPreferences.getInstance();
@@ -50,7 +50,6 @@ class SessionManager {
       temps = decoded.map((e) => (e as num).toDouble()).toList();
     }
 
-    // ✅ NOVO: Recuperar BPMs guardados
     String? bpmsJson = prefs.getString('bpms');
     if (bpmsJson != null) {
       List<dynamic> decoded = jsonDecode(bpmsJson);
@@ -78,27 +77,27 @@ class SessionManager {
     activityType = type;
     startTime = DateTime.now();
     temps = [];
-    bpms = []; // ✅ NOVO: reset dos BPMs
+    bpms = []; 
     route = [];
     distance = 0.0;
     await prefs.setBool('hasActiveSession', true);
     await prefs.setString('activityType', type);
     await prefs.setString('startTime', startTime!.toIso8601String());
     await prefs.setString('temps', '[]');
-    await prefs.setString('bpms', '[]'); // ✅ NOVO
+    await prefs.setString('bpms', '[]'); 
     await prefs.setString('route', '[]');
     await prefs.setDouble('distance', 0.0);
   }
 
   static Future<void> saveProgress(List<double> t, List<int> b, double la, double lo, List<LatLng> r, double d) async {
     temps = List.from(t);
-    bpms = List.from(b); // ✅ NOVO
+    bpms = List.from(b); 
     lastLat = la;
     lastLon = lo;
     route = List.from(r);
     distance = d;
     await prefs.setString('temps', jsonEncode(temps));
-    await prefs.setString('bpms', jsonEncode(bpms)); // ✅ NOVO
+    await prefs.setString('bpms', jsonEncode(bpms)); 
     await prefs.setDouble('lastLat', la);
     await prefs.setDouble('lastLon', lo);
     await prefs.setString('route', jsonEncode(route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()));
@@ -109,7 +108,7 @@ class SessionManager {
     hasActiveSession = false;
     startTime = null;
     temps = [];
-    bpms = []; // ✅ NOVO
+    bpms = []; 
     route = [];
     distance = 0.0;
     await prefs.clear(); 
@@ -253,30 +252,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
     buscarHistoricoDoPC();
   }
 
-  // --- Função para Botões ON/OFF ---
-  Future<void> _sendControlCommand(String command) async {
-    if (SessionManager.serverIp.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("IP não configurado. Leia o QR Code primeiro.")));
-      return;
-    }
-    MqttServerClient client = MqttServerClient(SessionManager.serverIp, 'flutter_cmd_${DateTime.now().millisecondsSinceEpoch}');
-    try {
-      await client.connect();
-      final builder = MqttClientPayloadBuilder();
-      builder.addString(command);
-      client.publishMessage('heartbox/control', MqttQos.atMostOnce, builder.payload!);
-      client.disconnect();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Comando $command enviado às placas!", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), 
-          backgroundColor: command == "ON" ? AppColors.success : AppColors.danger
-        )
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Erro ao conectar ao servidor MQTT para enviar comando.")));
-    }
-  }
-
   Future<void> buscarHistoricoDoPC() async {
     setState(() => isLoading = true);
     try {
@@ -319,7 +294,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               distExtraida = double.tryParse(item['distance'].toString()) ?? 0.0;
             }
 
-            // ✅ CORRIGIDO: lê 'bpm_history' em vez de 'bpm_readings'
             List<int> bpmExtraidos = [];
             var rawBpm = item['bpm_history'];
             if (rawBpm is List) {
@@ -375,53 +349,19 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // ABA 0: CONFIGURAÇÕES
+      // ABA 0: CONFIGURAÇÕES (COM LEITOR QR)
       Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
-              },
-              icon: const Icon(Icons.qr_code_scanner, size: 30),
-              label: const Text("Configurar Nova Placa (Wi-Fi)"),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.black,
-              ),
-            ),
-            const SizedBox(height: 60),
-            const Text("CONTROLO MANUAL DAS PLACAS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white38)),
-            const SizedBox(height: 15),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: () => _sendControlCommand("ON"),
-                  icon: const Icon(Icons.power_settings_new),
-                  label: const Text("LIGAR"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.success,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                  ),
-                ),
-                const SizedBox(width: 20),
-                ElevatedButton.icon(
-                  onPressed: () => _sendControlCommand("OFF"),
-                  icon: const Icon(Icons.power_settings_new),
-                  label: const Text("DESLIGAR"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.danger,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                  ),
-                ),
-              ],
-            )
-          ],
+        child: ElevatedButton.icon(
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
+          },
+          icon: const Icon(Icons.qr_code_scanner, size: 30),
+          label: const Text("Configurar / Controlar Placa via QR"),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.black,
+          ),
         ),
       ),
       
@@ -536,7 +476,7 @@ class MonitorScreen extends StatefulWidget {
 class _MonitorScreenState extends State<MonitorScreen> {
   MqttServerClient? client;
   List<double> allTemps = [];
-  List<int> allBpms = []; // ✅ NOVO: lista acumuladora de BPMs
+  List<int> allBpms = []; 
   double currentTemp = 0;
   
   double lat = 39.3999;
@@ -562,7 +502,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
-  // --- NOVAS VARIÁVEIS ECG / BPM ---
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -576,7 +515,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       SessionManager.start(widget.atividade);
     } else {
       allTemps = SessionManager.temps;
-      allBpms = SessionManager.bpms; // ✅ NOVO: recuperar BPMs da sessão
+      allBpms = SessionManager.bpms; 
       lat = SessionManager.lastLat;
       lon = SessionManager.lastLon;
       route = SessionManager.route;
@@ -591,7 +530,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && !isPaused) {
         setState(() { seconds = SessionManager.elapsedSeconds; });
-        // ✅ CORRIGIDO: passa allBpms para o saveProgress
         SessionManager.saveProgress(allTemps, allBpms, lat, lon, route, distance);
       }
     });
@@ -612,7 +550,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     super.dispose();
   }
 
-  // Dispara o piscar do coração quando recebe BPM novo
   void _triggerHeartBlink() {
     heartBlinkTimer?.cancel();
     setState(() => heartBlinkState = true);
@@ -631,7 +568,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
-      // NOVOS TÓPICOS ECG E BPM
       client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
       client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
@@ -695,7 +631,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             int newBpm = int.tryParse(payload) ?? 0;
             currentBpm = newBpm;
             if (newBpm > 0) {
-              allBpms.add(newBpm); // ✅ NOVO: acumula o BPM na lista
+              allBpms.add(newBpm);
               _triggerHeartBlink();
             }
           }
@@ -827,7 +763,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             "temperatures": allTemps,
             "distance": distance,
             "route": route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList(),
-            "bpm_history": allBpms, // ✅ NOVO: envia os BPMs ao guardar
+            "bpm_history": allBpms, 
           }),
         );
       } catch (e) { print(e); }
@@ -1087,9 +1023,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
   Widget _buildProximityBox() {
     bool isDanger = proximityStatus == "OBSTACULO_PERTO";
-    Color iconColor = isDanger 
-        ? (blinkState ? AppColors.danger : Colors.black) 
-        : AppColors.success;
+    Color iconColor = isDanger ? (blinkState ? AppColors.danger : Colors.black) : AppColors.success;
     String label = isDanger ? "Perigo!" : "Livre!";
 
     return Expanded(
@@ -1476,7 +1410,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   
   bool isSending = false;
   bool _obscurePassword = true;
-  String statusMessage = "Preencha os dados e clique em Enviar";
+  String statusMessage = "Preencha os dados e clique em Enviar\nOu utilize os botões rápidos de Controlo";
 
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
@@ -1489,6 +1423,91 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     _ipController = TextEditingController(text: SessionManager.serverIp);
   }
 
+  // --- Função para emitir os comandos diretos via BLE ---
+  Future<void> _enviarComandoBLE(String comando) async {
+    setState(() {
+      isSending = true;
+      statusMessage = "A procurar placas via Bluetooth para comando $comando...";
+    });
+
+    try {
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+      int configuredCount = 0;
+      Set<String> configuredMacs = {};
+      bool isConnecting = false;
+      
+      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        if (isConnecting) return;
+        for (ScanResult r in results) {
+          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
+          
+          if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
+            String mac = r.device.remoteId.str;
+            if (configuredMacs.contains(mac)) continue;
+            
+            isConnecting = true;
+            configuredMacs.add(mac);
+            setState(() => statusMessage = "Placa encontrada. A enviar comando ($mac)...");
+            
+            try {
+              await r.device.connect(timeout: const Duration(seconds: 5));
+              List<BluetoothService> services = await r.device.discoverServices();
+              for (var service in services) {
+                if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
+                  for (var c in service.characteristics) {
+                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
+                      // Usamos a caraterística de SSID para receber o comando especial de RESET ou ON
+                      await c.write(utf8.encode(comando));
+                    }
+                  }
+                }
+              }
+              await r.device.disconnect();
+              configuredCount++;
+              
+              if (mounted) setState(() => statusMessage = "✅ Comando enviado: $configuredCount/2 placas");
+
+              if (configuredCount >= 2) {
+                FlutterBluePlus.stopScan();
+                if (mounted) {
+                  setState(() {
+                    statusMessage = "✅ Sucesso! Comando Bluetooth enviado a todas as placas.";
+                    isSending = false;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Ação $comando realizada com sucesso!"), backgroundColor: AppColors.success));
+                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+                }
+              }
+            } catch (e) {
+              configuredMacs.remove(mac);
+            }
+            isConnecting = false;
+            break;
+          }
+        }
+      });
+
+      await Future.delayed(const Duration(seconds: 15));
+      
+      if (configuredCount < 2) {
+        FlutterBluePlus.stopScan();
+        if (mounted) {
+          setState(() {
+            isSending = false;
+            if (configuredCount == 0) {
+              statusMessage = "✅ As placas já estão conectadas à rede Wi-Fi ou desligadas!";
+            } else {
+              statusMessage = "⚠️ Comando recebido em 1 placa. A outra já deve estar conectada/desligada.";
+            }
+          });
+        }
+      }
+      subscription.cancel();
+    } catch (e) {
+      if (mounted) setState(() { isSending = false; statusMessage = "❌ Falha na comunicação Bluetooth."; });
+    }
+  }
+
   Future<void> _enviarDadosBLE() async {
     await SessionManager.setServerIp(_ipController.text);
     
@@ -1498,7 +1517,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     });
 
     try {
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 20));
 
       int configuredCount = 0;
       Set<String> configuredMacs = {};
@@ -1571,16 +1590,18 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         }
       });
 
-      await Future.delayed(const Duration(seconds: 15));
+      await Future.delayed(const Duration(seconds: 20)); // Aumentei o tempo de scan
       
       if (configuredCount < 2) {
         FlutterBluePlus.stopScan();
         if (mounted) {
           setState(() {
             isSending = false;
-            statusMessage = configuredCount == 1 
-                ? "⚠️ Apenas 1 placa foi configurada. Tente de novo." 
-                : "❌ Nenhuma placa foi encontrada.";
+            if (configuredCount == 0) {
+              statusMessage = "✅ As placas já estão conectadas à rede Wi-Fi!";
+            } else {
+              statusMessage = "⚠️ Apenas 1 placa foi configurada. A outra já deve estar conectada.";
+            }
           });
         }
       }
@@ -1599,13 +1620,13 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Configurar Wi-Fi"), backgroundColor: Colors.transparent),
+      appBar: AppBar(title: const Text("Configuração & Controlo"), backgroundColor: Colors.transparent),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(30),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Alvo: ${widget.targetName}", 
+            Text("Alvo de Bluetooth: ${widget.targetName}", 
                  style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
@@ -1650,7 +1671,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
               ),
             ),
             
-            const SizedBox(height: 40),
+            const SizedBox(height: 25),
             
             SizedBox(
               width: double.infinity,
@@ -1664,10 +1685,54 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 ),
                 child: isSending 
                     ? const CircularProgressIndicator(color: Colors.black) 
-                    : const Text("ENVIAR PARA AS PLACAS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    : const Text("ENVIAR CREDENCIAIS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               ),
             ),
             
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Divider(color: Colors.white10, thickness: 2),
+            ),
+
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: isSending ? null : () => _enviarComandoBLE("ON"),
+                    icon: const Icon(Icons.power_settings_new),
+                    label: const Text("LIGAR"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success, 
+                      foregroundColor: Colors.white, 
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 15),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: isSending ? null : () => _enviarComandoBLE("RESET"),
+                    icon: const Icon(Icons.power_off),
+                    label: const Text("DESLIGAR"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.danger, 
+                      foregroundColor: Colors.white, 
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              "* DESLIGAR irá apagar o Wi-Fi e colocar as placas a dormir. "
+              "Só precisa do QR Code para usar estes botões.",
+              style: TextStyle(color: Colors.white24, fontSize: 11),
+              textAlign: TextAlign.center,
+            ),
+
             const SizedBox(height: 30),
             Center(
               child: Text(
