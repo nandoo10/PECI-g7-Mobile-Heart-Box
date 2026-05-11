@@ -1457,19 +1457,32 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     return false;
   }
 
+  // ── ALTERAÇÃO 1: _operateOnBoard com 2 tentativas automáticas ─────────────
   /// Executa uma operação numa placa já conectada.
-  /// Retorna null se OK, ou mensagem de erro se falhou.
-  Future<String?> _operateOnBoard(BluetoothDevice device, Future<void> Function(List<BluetoothService> services) operation) async {
-    try {
-      await device.connect(timeout: const Duration(seconds: 6));
-      final services = await device.discoverServices();
-      await operation(services);
-      await device.disconnect();
-      return null;
-    } catch (e) {
-      try { await device.disconnect(); } catch (_) {}
-      return e.toString();
+  /// Retorna null se OK, ou mensagem de erro se falhou após 2 tentativas.
+  Future<String?> _operateOnBoard(
+    BluetoothDevice device,
+    Future<void> Function(List<BluetoothService> services) operation,
+  ) async {
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      try {
+        debugPrint('[BLE] Tentativa $attempt para ${device.remoteId.str}');
+        await device.connect(timeout: const Duration(seconds: 8));
+        final services = await device.discoverServices();
+        await operation(services);
+        await device.disconnect();
+        return null; // sucesso
+      } catch (e) {
+        try { await device.disconnect(); } catch (_) {}
+        debugPrint('[BLE] Tentativa $attempt falhou: $e');
+        if (attempt < 2) {
+          await Future.delayed(const Duration(seconds: 2));
+        } else {
+          return e.toString();
+        }
+      }
     }
+    return 'Erro desconhecido';
   }
 
   /// Encontra características dentro de um serviço pelo UUID
@@ -1484,19 +1497,20 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     return null;
   }
 
+  // ── ALTERAÇÃO 2: scan alargado para 20s + logs de debug ───────────────────
   /// Scan BLE por [scanSeconds] e retorna todos os dispositivos que correspondem às placas.
-  /// Inclui também dispositivos já pareados/em cache que correspondam.
   Future<List<ScanResult>> _scanForBoards(int scanSeconds) async {
     final found = <String, ScanResult>{};
 
-    final completer = Completer<void>();
     StreamSubscription? sub;
-
     sub = FlutterBluePlus.scanResults.listen((results) {
       for (final r in results) {
-        final name = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
+        final name = r.device.advName.isNotEmpty
+            ? r.device.advName
+            : r.advertisementData.advName;
         if (_isBoardDevice(name) && !found.containsKey(r.device.remoteId.str)) {
           found[r.device.remoteId.str] = r;
+          debugPrint('[SCAN] Placa encontrada: $name | MAC: ${r.device.remoteId.str}');
         }
       }
     });
@@ -1506,20 +1520,24 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     await FlutterBluePlus.stopScan();
     sub.cancel();
 
+    debugPrint('[SCAN] Total de placas únicas encontradas: ${found.length}');
+    for (final e in found.entries) {
+      debugPrint('  -> MAC: ${e.key} | Nome: ${e.value.device.advName}');
+    }
+
     return found.values.toList();
   }
 
-  // ─── ENVIAR CREDENCIAIS WI-FI ─────────────────────────────────────────────
+  // ── ALTERAÇÃO 3: _enviarDadosBLE com contagem, feedback e delay entre placas
   Future<void> _enviarDadosBLE() async {
     await SessionManager.setServerIp(_ipController.text);
 
     setState(() { isSending = true; _isError = false; });
-    _setStatus("A procurar placas...", "A fazer scan Bluetooth (15s)");
+    _setStatus("A procurar placas...", "A fazer scan Bluetooth (20s)");
 
-    final boards = await _scanForBoards(15);
+    final boards = await _scanForBoards(20);
 
     if (boards.isEmpty) {
-      // Nenhuma placa encontrada em modo BLE → já estão todas ligadas ao Wi-Fi
       _setStatus(
         "✅ Placas já ligadas à rede",
         "Nenhuma placa encontrada em modo Bluetooth.\nAs placas já estão ligadas ao access point configurado.",
@@ -1528,16 +1546,30 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
       return;
     }
 
-    // Tenta configurar cada placa encontrada
+    _setStatus(
+      "A configurar placas...",
+      "${boards.length} placa(s) encontrada(s). A iniciar configuração...",
+    );
+
+    // Pequeno delay para o utilizador ver a contagem antes de começar
+    await Future.delayed(const Duration(seconds: 1));
+
     final results = <_BoardResult>[];
-    for (final board in boards) {
-      final name = board.device.advName.isNotEmpty ? board.device.advName : board.advertisementData.advName;
-      _setStatus("A configurar placa...", "MAC: ${board.device.remoteId.str}");
+    for (int i = 0; i < boards.length; i++) {
+      final board = boards[i];
+      final name = board.device.advName.isNotEmpty
+          ? board.device.advName
+          : board.advertisementData.advName;
+
+      _setStatus(
+        "A configurar placa ${i + 1}/${boards.length}...",
+        "Nome: ${name.isNotEmpty ? name : 'Desconhecido'}\nMAC: ${board.device.remoteId.str}",
+      );
 
       final err = await _operateOnBoard(board.device, (services) async {
-        final ssidChar   = _findChar(services, SERVICE_UUID, UUID_SSID);
-        final passChar   = _findChar(services, SERVICE_UUID, UUID_PASS);
-        final ipChar     = _findChar(services, SERVICE_UUID, UUID_SERVERIP);
+        final ssidChar  = _findChar(services, SERVICE_UUID, UUID_SSID);
+        final passChar  = _findChar(services, SERVICE_UUID, UUID_PASS);
+        final ipChar    = _findChar(services, SERVICE_UUID, UUID_SERVERIP);
 
         if (ssidChar == null || passChar == null || ipChar == null) {
           throw Exception("Características BLE não encontradas");
@@ -1557,9 +1589,14 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         success: err == null,
         errorMsg: err,
       ));
+
+      // Delay entre placas: dá tempo à placa configurada para iniciar o
+      // restart sem interferir com a ligação à placa seguinte
+      if (i < boards.length - 1) {
+        await Future.delayed(const Duration(seconds: 3));
+      }
     }
 
-    // Compõe mensagem de resultado detalhada
     final succeeded = results.where((r) => r.success).toList();
     final failed    = results.where((r) => !r.success).toList();
 
@@ -1590,20 +1627,17 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     setState(() => isSending = false);
   }
 
-  // ─── ENVIAR COMANDO (ON / RESET) ──────────────────────────────────────────
+  // ── ALTERAÇÃO 4: _enviarComandoBLE com as mesmas melhorias ─────────────────
   Future<void> _enviarComandoBLE(String comando) async {
     setState(() { isSending = true; _isError = false; });
 
     final String labelComando = comando == "RESET" ? "DESLIGAR" : "LIGAR";
-    _setStatus("A procurar placas...", "A fazer scan Bluetooth (15s) para comando $labelComando");
+    _setStatus("A procurar placas...", "A fazer scan Bluetooth (20s) para comando $labelComando");
 
-    final boards = await _scanForBoards(15);
+    final boards = await _scanForBoards(20);
 
     if (boards.isEmpty) {
-      // Nenhuma placa em modo BLE
       if (comando == "RESET") {
-        // Para RESET, se não estão em BLE, provavelmente já estão em Wi-Fi —
-        // não podemos desligá-las via BLE. Informa o utilizador.
         _setStatus(
           "⚠️ Placas não encontradas via Bluetooth",
           "As placas parecem estar ligadas ao Wi-Fi e não estão acessíveis via Bluetooth.\n"
@@ -1611,7 +1645,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
           error: true,
         );
       } else {
-        // Para ON: se não aparecem em BLE significa que já estão ligadas
         _setStatus(
           "✅ Placas já estão ligadas",
           "Nenhuma placa encontrada em modo Bluetooth.\nAs placas já estão ativas e ligadas à rede.",
@@ -1621,13 +1654,26 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
       return;
     }
 
+    _setStatus(
+      "A enviar comando $labelComando...",
+      "${boards.length} placa(s) encontrada(s). A enviar...",
+    );
+
+    await Future.delayed(const Duration(seconds: 1));
+
     final results = <_BoardResult>[];
-    for (final board in boards) {
-      final name = board.device.advName.isNotEmpty ? board.device.advName : board.advertisementData.advName;
-      _setStatus("A enviar comando $labelComando...", "MAC: ${board.device.remoteId.str}");
+    for (int i = 0; i < boards.length; i++) {
+      final board = boards[i];
+      final name = board.device.advName.isNotEmpty
+          ? board.device.advName
+          : board.advertisementData.advName;
+
+      _setStatus(
+        "A enviar $labelComando a placa ${i + 1}/${boards.length}...",
+        "MAC: ${board.device.remoteId.str}",
+      );
 
       final err = await _operateOnBoard(board.device, (services) async {
-        // O comando ON/RESET é enviado na característica de SSID (conforme implementação existente no ESP32-S3)
         final ssidChar = _findChar(services, SERVICE_UUID, UUID_SSID);
         if (ssidChar == null) throw Exception("Característica SSID não encontrada");
         await ssidChar.write(utf8.encode(comando));
@@ -1639,6 +1685,10 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         success: err == null,
         errorMsg: err,
       ));
+
+      if (i < boards.length - 1) {
+        await Future.delayed(const Duration(seconds: 3));
+      }
     }
 
     final succeeded = results.where((r) => r.success).toList();
