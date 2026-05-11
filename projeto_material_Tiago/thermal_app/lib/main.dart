@@ -253,6 +253,30 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
     buscarHistoricoDoPC();
   }
 
+  // --- Função para Botões ON/OFF ---
+  Future<void> _sendControlCommand(String command) async {
+    if (SessionManager.serverIp.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("IP não configurado. Leia o QR Code primeiro.")));
+      return;
+    }
+    MqttServerClient client = MqttServerClient(SessionManager.serverIp, 'flutter_cmd_${DateTime.now().millisecondsSinceEpoch}');
+    try {
+      await client.connect();
+      final builder = MqttClientPayloadBuilder();
+      builder.addString(command);
+      client.publishMessage('heartbox/control', MqttQos.atMostOnce, builder.payload!);
+      client.disconnect();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Comando $command enviado às placas!", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), 
+          backgroundColor: command == "ON" ? AppColors.success : AppColors.danger
+        )
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Erro ao conectar ao servidor MQTT para enviar comando.")));
+    }
+  }
+
   Future<void> buscarHistoricoDoPC() async {
     setState(() => isLoading = true);
     try {
@@ -351,19 +375,53 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // ABA 0: CONFIGURAÇÕES (COM LEITOR QR)
+      // ABA 0: CONFIGURAÇÕES
       Center(
-        child: ElevatedButton.icon(
-          onPressed: () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
-          },
-          icon: const Icon(Icons.qr_code_scanner, size: 30),
-          label: const Text("Configurar Nova Placa (Wi-Fi)"),
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
-            backgroundColor: AppColors.primary,
-            foregroundColor: Colors.black,
-          ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
+              },
+              icon: const Icon(Icons.qr_code_scanner, size: 30),
+              label: const Text("Configurar Nova Placa (Wi-Fi)"),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.black,
+              ),
+            ),
+            const SizedBox(height: 60),
+            const Text("CONTROLO MANUAL DAS PLACAS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white38)),
+            const SizedBox(height: 15),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () => _sendControlCommand("ON"),
+                  icon: const Icon(Icons.power_settings_new),
+                  label: const Text("LIGAR"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                  ),
+                ),
+                const SizedBox(width: 20),
+                ElevatedButton.icon(
+                  onPressed: () => _sendControlCommand("OFF"),
+                  icon: const Icon(Icons.power_settings_new),
+                  label: const Text("DESLIGAR"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.danger,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                  ),
+                ),
+              ],
+            )
+          ],
         ),
       ),
       
@@ -504,7 +562,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
-  // Variáveis ECG / BPM
+  // --- NOVAS VARIÁVEIS ECG / BPM ---
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -554,6 +612,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     super.dispose();
   }
 
+  // Dispara o piscar do coração quando recebe BPM novo
   void _triggerHeartBlink() {
     heartBlinkTimer?.cancel();
     setState(() => heartBlinkState = true);
@@ -572,6 +631,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
+      // NOVOS TÓPICOS ECG E BPM
       client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
       client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
@@ -1583,7 +1643,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             TextField(
               controller: _ipController,
               decoration: InputDecoration(
-                labelText: "IP do Computador", 
+                labelText: "IP do Computador / Cloud", 
                 filled: true, 
                 fillColor: AppColors.surface, 
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
