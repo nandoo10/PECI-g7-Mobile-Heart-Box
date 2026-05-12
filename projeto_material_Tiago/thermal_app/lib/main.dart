@@ -1435,150 +1435,82 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     _ipController = TextEditingController(text: SessionManager.serverIp);
   }
 
-  Future<void> _enviarDadosBLE() async {
+Future<void> _enviarDadosBLE() async {
     await SessionManager.setServerIp(_ipController.text);
+    
+    // O targetName aqui será "esp32s3/esp32cam"
+    List<String> alvos = widget.targetName.split('/');
+    Map<String, bool> configurados = { for (var a in alvos) a: false };
 
     setState(() {
       isSending = true;
-      statusMessage = "A fazer scan BLE (10 segundos)...";
+      statusMessage = "A procurar os alvos: ${alvos.join(', ')}...";
     });
 
     try {
-      // ── 1. Scan completo: recolhe todos os dispositivos durante 10 segundos ──
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
-      await Future.delayed(const Duration(seconds: 10));
-      await FlutterBluePlus.stopScan();
+      // Scan mais longo para garantir que apanha as duas
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 25));
 
-      // ── 2. Filtrar apenas as nossas placas ──
-      // Critério principal: SERVICE UUID anunciado (mais fiável que o nome)
-      // Critério de fallback: nome BLE contém "Heart_Box" ou o targetName do QR
-      List<ScanResult> todasResults = FlutterBluePlus.lastScanResults;
-
-      List<ScanResult> nossasPlacas = todasResults.where((r) {
-        // Verificar por SERVICE UUID anunciado
-        for (var uuid in r.advertisementData.serviceUuids) {
-          String u = uuid.str.toLowerCase();
-          if (u == SERVICE_UUID_S3.toLowerCase() || u == SERVICE_UUID_CAM.toLowerCase()) {
-            return true;
-          }
-        }
-        // Fallback: verificar pelo nome BLE
-        String name = r.device.platformName.isNotEmpty
-            ? r.device.platformName
-            : r.advertisementData.advName;
-        return name.contains("Heart_Box") || name.contains(widget.targetName.trim());
-      }).toList();
-
-      if (nossasPlacas.isEmpty) {
-        setState(() {
-          isSending = false;
-          statusMessage = "❌ Nenhuma placa encontrada.\n(Se já estiverem no Wi-Fi, pode fechar este ecrã)";
-        });
-        return;
-      }
-
-      setState(() => statusMessage = "${nossasPlacas.length} placa(s) encontrada(s). A configurar...");
-
-      // ── 3. Configurar cada placa SEQUENCIALMENTE ──
-      int configuredCount = 0;
-      for (ScanResult placa in nossasPlacas) {
-        String mac = placa.device.remoteId.str;
-        setState(() => statusMessage = "A configurar placa $mac...");
-
-        try {
-          await placa.device.connect(timeout: const Duration(seconds: 8));
-          // Pequena pausa para negociação MTU
-          await Future.delayed(const Duration(milliseconds: 500));
-
-          List<BluetoothService> services = await placa.device.discoverServices();
-          bool escreveuIp = false;
-
-          for (var service in services) {
-            String sUuid = service.uuid.str.toLowerCase();
-            if (sUuid == SERVICE_UUID_S3.toLowerCase() || sUuid == SERVICE_UUID_CAM.toLowerCase()) {
-              for (var c in service.characteristics) {
-                String cUuid = c.uuid.str.toLowerCase();
-                try {
-                  if (cUuid == UUID_SSID.toLowerCase()) {
-                    await c.write(utf8.encode(_ssidController.text), withoutResponse: false);
-                    await Future.delayed(const Duration(milliseconds: 300));
+      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        for (ScanResult r in results) {
+          String name = r.device.platformName.isEmpty ? r.advertisementData.advName : r.device.platformName;
+          
+          if (configurados.containsKey(name) && configurados[name] == false) {
+            configurados[name] = true; // Reserva esta placa
+            
+            setState(() => statusMessage = "Configurando $name...");
+            
+            try {
+              await r.device.connect(timeout: const Duration(seconds: 8));
+              List<BluetoothService> services = await r.device.discoverServices();
+              
+              for (var s in services) {
+                // Aceita qualquer um dos dois UUIDs de serviço
+                if (s.uuid.str.toLowerCase() == SERVICE_UUID_S3.toLowerCase() || 
+                    s.uuid.str.toLowerCase() == SERVICE_UUID_CAM.toLowerCase()) {
+                  
+                  for (var c in s.characteristics) {
+                    if (c.uuid.str.toLowerCase() == UUID_SSID.toLowerCase()) {
+                      await c.write(utf8.encode(_ssidController.text));
+                    }
+                    if (c.uuid.str.toLowerCase() == UUID_PASS.toLowerCase()) {
+                      await c.write(utf8.encode(_passController.text));
+                    }
+                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP.toLowerCase()) {
+                      await c.write(utf8.encode(_ipController.text));
+                    }
                   }
-                  if (cUuid == UUID_PASS.toLowerCase()) {
-                    await c.write(utf8.encode(_passController.text), withoutResponse: false);
-                    await Future.delayed(const Duration(milliseconds: 300));
-                  }
-                  if (cUuid == UUID_SERVERIP.toLowerCase()) {
-                    // Enviar só o IP — as placas já assumem porta 1883
-                    await c.write(utf8.encode(_ipController.text), withoutResponse: false);
-                    await Future.delayed(const Duration(milliseconds: 300));
-                    escreveuIp = true;
-                  }
-                } catch (e) {
-                  print("Erro ao escrever característica $cUuid na placa $mac: $e");
                 }
               }
+              await r.device.disconnect();
+              
+              int total = configurados.values.where((v) => v == true).length;
+              setState(() => statusMessage = "✅ $name OK ($total/${alvos.length})");
+              
+              if (total == alvos.length) {
+                FlutterBluePlus.stopScan();
+                setState(() => isSending = false);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Todas as placas configuradas!")));
+                Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+              }
+            } catch (e) {
+              configurados[name] = false; // Falhou, tenta no próximo scan
             }
           }
-
-          await Future.delayed(const Duration(milliseconds: 500));
-          await placa.device.disconnect();
-
-          if (escreveuIp) {
-            configuredCount++;
-            setState(() => statusMessage = "✅ $configuredCount/${nossasPlacas.length} placa(s) configurada(s)");
-          }
-
-          // Pausa entre placas para não saturar o BT do telemóvel
-          if (configuredCount < nossasPlacas.length) {
-            await Future.delayed(const Duration(seconds: 2));
-          }
-
-        } catch (e) {
-          print("Erro na placa $mac: $e");
-          try { await placa.device.disconnect(); } catch (_) {}
-          setState(() => statusMessage = "⚠️ Falha em $mac. A continuar para a próxima...");
-          await Future.delayed(const Duration(seconds: 1));
         }
-      }
-
-      // ── 4. Resultado final ──
-      if (configuredCount == nossasPlacas.length) {
-        setState(() {
-          isSending = false;
-          statusMessage = "✅ Sucesso! $configuredCount/${nossasPlacas.length} placa(s) configurada(s).\nAs placas vão reiniciar e ligar ao Wi-Fi.";
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("$configuredCount placa(s) configurada(s) com sucesso!"),
-              backgroundColor: AppColors.success,
-            ),
-          );
-          // Navegar automaticamente para o menu após 2 segundos
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) {
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const ActivityMenuScreen()),
-                (route) => false,
-              );
-            }
-          });
-        }
-      } else {
-        setState(() {
-          isSending = false;
-          statusMessage = configuredCount == 0
-              ? "❌ Nenhuma placa foi configurada."
-              : "⚠️ Apenas $configuredCount/${nossasPlacas.length} placa(s) configurada(s).";
-        });
-      }
-
-    } catch (e) {
-      setState(() {
-        isSending = false;
-        statusMessage = "❌ Falha na comunicação Bluetooth: $e";
       });
+
+      await Future.delayed(const Duration(seconds: 25));
+      if (isSending) {
+        FlutterBluePlus.stopScan();
+        setState(() {
+          isSending = false;
+          statusMessage = "❌ Falhou. Verifique se as placas estão em modo Configuração.";
+        });
+      }
+      subscription.cancel();
+    } catch (e) {
+      setState(() { isSending = false; statusMessage = "Erro: $e"; });
     }
   }
 
