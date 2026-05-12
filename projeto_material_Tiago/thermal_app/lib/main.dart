@@ -3,16 +3,16 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; 
-import 'package:url_launcher/url_launcher.dart'; 
+import 'package:flutter/services.dart'; // Para o Alerta Sonoro e Vibração
+import 'package:url_launcher/url_launcher.dart'; // Para ligar para o número
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_map/flutter_map.dart'; 
 import 'package:latlong2/latlong.dart'; 
 import 'package:shared_preferences/shared_preferences.dart'; 
-import 'package:mobile_scanner/mobile_scanner.dart'; 
-import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
+import 'package:mobile_scanner/mobile_scanner.dart'; // Para o Leitor de QR Code
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // FASE 3: Para o Bluetooth
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,12 +29,12 @@ class SessionManager {
   static String activityType = "Caminhada";
   static DateTime? startTime; 
   static List<double> temps = [];
-  static List<int> bpms = []; 
+  static List<int> bpms = []; // ✅ NOVO: lista de BPMs da sessão
   static double lastLat = 39.3999;
   static double lastLon = -8.2245;
   static List<LatLng> route = [];
   static double distance = 0.0;
-  static String serverIp = ""; 
+  static String serverIp = ""; // IP dinâmico
 
   static Future<void> init() async {
     prefs = await SharedPreferences.getInstance();
@@ -50,6 +50,7 @@ class SessionManager {
       temps = decoded.map((e) => (e as num).toDouble()).toList();
     }
 
+    // ✅ NOVO: Recuperar BPMs guardados
     String? bpmsJson = prefs.getString('bpms');
     if (bpmsJson != null) {
       List<dynamic> decoded = jsonDecode(bpmsJson);
@@ -77,27 +78,27 @@ class SessionManager {
     activityType = type;
     startTime = DateTime.now();
     temps = [];
-    bpms = []; 
+    bpms = []; // ✅ NOVO: reset dos BPMs
     route = [];
     distance = 0.0;
     await prefs.setBool('hasActiveSession', true);
     await prefs.setString('activityType', type);
     await prefs.setString('startTime', startTime!.toIso8601String());
     await prefs.setString('temps', '[]');
-    await prefs.setString('bpms', '[]'); 
+    await prefs.setString('bpms', '[]'); // ✅ NOVO
     await prefs.setString('route', '[]');
     await prefs.setDouble('distance', 0.0);
   }
 
   static Future<void> saveProgress(List<double> t, List<int> b, double la, double lo, List<LatLng> r, double d) async {
     temps = List.from(t);
-    bpms = List.from(b); 
+    bpms = List.from(b); // ✅ NOVO
     lastLat = la;
     lastLon = lo;
     route = List.from(r);
     distance = d;
     await prefs.setString('temps', jsonEncode(temps));
-    await prefs.setString('bpms', jsonEncode(bpms)); 
+    await prefs.setString('bpms', jsonEncode(bpms)); // ✅ NOVO
     await prefs.setDouble('lastLat', la);
     await prefs.setDouble('lastLon', lo);
     await prefs.setString('route', jsonEncode(route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()));
@@ -108,7 +109,7 @@ class SessionManager {
     hasActiveSession = false;
     startTime = null;
     temps = [];
-    bpms = []; 
+    bpms = []; // ✅ NOVO
     route = [];
     distance = 0.0;
     await prefs.clear(); 
@@ -294,6 +295,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               distExtraida = double.tryParse(item['distance'].toString()) ?? 0.0;
             }
 
+            // ✅ CORRIGIDO: lê 'bpm_history' em vez de 'bpm_readings'
             List<int> bpmExtraidos = [];
             var rawBpm = item['bpm_history'];
             if (rawBpm is List) {
@@ -356,7 +358,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
             Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
           },
           icon: const Icon(Icons.qr_code_scanner, size: 30),
-          label: const Text("Configurar / Controlar Placa via QR"),
+          label: const Text("Configurar Nova Placa (Wi-Fi)"),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
             backgroundColor: AppColors.primary,
@@ -476,7 +478,7 @@ class MonitorScreen extends StatefulWidget {
 class _MonitorScreenState extends State<MonitorScreen> {
   MqttServerClient? client;
   List<double> allTemps = [];
-  List<int> allBpms = []; 
+  List<int> allBpms = []; // ✅ NOVO: lista acumuladora de BPMs
   double currentTemp = 0;
   
   double lat = 39.3999;
@@ -502,6 +504,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
+  // Variáveis ECG / BPM
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -515,7 +518,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       SessionManager.start(widget.atividade);
     } else {
       allTemps = SessionManager.temps;
-      allBpms = SessionManager.bpms; 
+      allBpms = SessionManager.bpms; // ✅ NOVO: recuperar BPMs da sessão
       lat = SessionManager.lastLat;
       lon = SessionManager.lastLon;
       route = SessionManager.route;
@@ -530,6 +533,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && !isPaused) {
         setState(() { seconds = SessionManager.elapsedSeconds; });
+        // ✅ CORRIGIDO: passa allBpms para o saveProgress
         SessionManager.saveProgress(allTemps, allBpms, lat, lon, route, distance);
       }
     });
@@ -631,7 +635,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             int newBpm = int.tryParse(payload) ?? 0;
             currentBpm = newBpm;
             if (newBpm > 0) {
-              allBpms.add(newBpm);
+              allBpms.add(newBpm); // ✅ NOVO: acumula o BPM na lista
               _triggerHeartBlink();
             }
           }
@@ -763,7 +767,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             "temperatures": allTemps,
             "distance": distance,
             "route": route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList(),
-            "bpm_history": allBpms, 
+            "bpm_history": allBpms, // ✅ NOVO: envia os BPMs ao guardar
           }),
         );
       } catch (e) { print(e); }
@@ -1023,7 +1027,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
   Widget _buildProximityBox() {
     bool isDanger = proximityStatus == "OBSTACULO_PERTO";
-    Color iconColor = isDanger ? (blinkState ? AppColors.danger : Colors.black) : AppColors.success;
+    Color iconColor = isDanger 
+        ? (blinkState ? AppColors.danger : Colors.black) 
+        : AppColors.success;
     String label = isDanger ? "Perigo!" : "Livre!";
 
     return Expanded(
@@ -1393,18 +1399,8 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
 }
 
 ////////////////////////////////////////////////////
-/// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE
+/// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
 ////////////////////////////////////////////////////
-
-// Representa o resultado de tentativa de configuração/comando para uma placa
-class _BoardResult {
-  final String mac;
-  final String name;
-  final bool success;
-  final String? errorMsg;
-  _BoardResult({required this.mac, required this.name, required this.success, this.errorMsg});
-}
-
 class WifiConfigScreen extends StatefulWidget {
   final String targetName;
   const WifiConfigScreen({super.key, required this.targetName});
@@ -1420,19 +1416,12 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   
   bool isSending = false;
   bool _obscurePassword = true;
-
-  // Estado de progresso visível ao utilizador
-  String _statusTitle = "";
-  String _statusDetail = "";
-  bool _isError = false;
+  String statusMessage = "Preencha os dados e clique em Enviar";
 
   final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
-  final String UUID_SSID    = "ab35e54e-fde4-4f83-902a-07785de547b9";
-  final String UUID_PASS    = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
+  final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
+  final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
   final String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
-
-  // Nomes BLE conhecidos das placas
-  static const List<String> _boardBleNames = ["THERMAL_CAM"];
 
   @override
   void initState() {
@@ -1440,297 +1429,123 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     _ipController = TextEditingController(text: SessionManager.serverIp);
   }
 
-  void _setStatus(String title, String detail, {bool error = false}) {
-    if (!mounted) return;
-    setState(() {
-      _statusTitle = title;
-      _statusDetail = detail;
-      _isError = error;
-    });
-  }
-
-  /// Verifica se o nome do dispositivo BLE corresponde a uma das nossas placas
-  bool _isBoardDevice(String devName) {
-    for (final knownName in _boardBleNames) {
-      if (devName.contains(knownName) || devName.contains(widget.targetName)) return true;
-    }
-    return false;
-  }
-
-  // ── ALTERAÇÃO 1: _operateOnBoard com 2 tentativas automáticas ─────────────
-  /// Executa uma operação numa placa já conectada.
-  /// Retorna null se OK, ou mensagem de erro se falhou após 2 tentativas.
-  Future<String?> _operateOnBoard(
-    BluetoothDevice device,
-    Future<void> Function(List<BluetoothService> services) operation,
-  ) async {
-    for (int attempt = 1; attempt <= 2; attempt++) {
-      try {
-        debugPrint('[BLE] Tentativa $attempt para ${device.remoteId.str}');
-        await device.connect(timeout: const Duration(seconds: 8));
-        final services = await device.discoverServices();
-        await operation(services);
-        await device.disconnect();
-        return null; // sucesso
-      } catch (e) {
-        try { await device.disconnect(); } catch (_) {}
-        debugPrint('[BLE] Tentativa $attempt falhou: $e');
-        if (attempt < 2) {
-          await Future.delayed(const Duration(seconds: 2));
-        } else {
-          return e.toString();
-        }
-      }
-    }
-    return 'Erro desconhecido';
-  }
-
-  /// Encontra características dentro de um serviço pelo UUID
-  BluetoothCharacteristic? _findChar(List<BluetoothService> services, String serviceUuid, String charUuid) {
-    for (final svc in services) {
-      if (svc.uuid.str.toLowerCase() == serviceUuid.toLowerCase()) {
-        for (final c in svc.characteristics) {
-          if (c.uuid.str.toLowerCase() == charUuid.toLowerCase()) return c;
-        }
-      }
-    }
-    return null;
-  }
-
-  // ── ALTERAÇÃO 2: scan alargado para 20s + logs de debug ───────────────────
-  /// Scan BLE por [scanSeconds] e retorna todos os dispositivos que correspondem às placas.
-  Future<List<ScanResult>> _scanForBoards(int scanSeconds) async {
-    final found = <String, ScanResult>{};
-
-    StreamSubscription? sub;
-    sub = FlutterBluePlus.scanResults.listen((results) {
-      for (final r in results) {
-        final name = r.device.advName.isNotEmpty
-            ? r.device.advName
-            : r.advertisementData.advName;
-        if (_isBoardDevice(name) && !found.containsKey(r.device.remoteId.str)) {
-          found[r.device.remoteId.str] = r;
-          debugPrint('[SCAN] Placa encontrada: $name | MAC: ${r.device.remoteId.str}');
-        }
-      }
-    });
-
-    await FlutterBluePlus.startScan(timeout: Duration(seconds: scanSeconds));
-    await Future.delayed(Duration(seconds: scanSeconds));
-    await FlutterBluePlus.stopScan();
-    sub.cancel();
-
-    debugPrint('[SCAN] Total de placas únicas encontradas: ${found.length}');
-    for (final e in found.entries) {
-      debugPrint('  -> MAC: ${e.key} | Nome: ${e.value.device.advName}');
-    }
-
-    return found.values.toList();
-  }
-
-  // ── ALTERAÇÃO 3: _enviarDadosBLE com contagem, feedback e delay entre placas
   Future<void> _enviarDadosBLE() async {
     await SessionManager.setServerIp(_ipController.text);
+    
+    setState(() {
+      isSending = true;
+      statusMessage = "A procurar as placas (${widget.targetName})...";
+    });
 
-    setState(() { isSending = true; _isError = false; });
-    _setStatus("A procurar placas...", "A fazer scan Bluetooth (20s)");
+    try {
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
-    final boards = await _scanForBoards(20);
+      int configuredCount = 0;
+      Set<String> configuredMacs = {};
+      bool isConnecting = false;
+      
+      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        if (isConnecting) return;
 
-    if (boards.isEmpty) {
-      _setStatus(
-        "✅ Placas já ligadas à rede",
-        "Nenhuma placa encontrada em modo Bluetooth.\nAs placas já estão ligadas ao access point configurado.",
-      );
-      setState(() => isSending = false);
-      return;
-    }
+        for (ScanResult r in results) {
+          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
+          
+          if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
+            String mac = r.device.remoteId.str;
+            if (configuredMacs.contains(mac)) continue;
+            
+            isConnecting = true;
+            configuredMacs.add(mac);
 
-    _setStatus(
-      "A configurar placas...",
-      "${boards.length} placa(s) encontrada(s). A iniciar configuração...",
-    );
+            setState(() => statusMessage = "Placa encontrada. A configurar ($mac)...");
+            
+            try {
+              await r.device.connect(timeout: const Duration(seconds: 5));
+              
+              List<BluetoothService> services = await r.device.discoverServices();
+              for (var service in services) {
+                if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
+                  for (var c in service.characteristics) {
+                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
+                      await c.write(utf8.encode(_ssidController.text));
+                    }
+                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
+                      await c.write(utf8.encode(_passController.text));
+                    }
+                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
+                      String ipEnvio = _ipController.text;
+                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
+                      await c.write(utf8.encode(ipEnvio));
+                    }
+                  }
+                }
+              }
 
-    // Pequeno delay para o utilizador ver a contagem antes de começar
-    await Future.delayed(const Duration(seconds: 1));
+              await r.device.disconnect();
+              configuredCount++;
+              
+              if (mounted) {
+                setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
+              }
 
-    final results = <_BoardResult>[];
-    for (int i = 0; i < boards.length; i++) {
-      final board = boards[i];
-      final name = board.device.advName.isNotEmpty
-          ? board.device.advName
-          : board.advertisementData.advName;
-
-      _setStatus(
-        "A configurar placa ${i + 1}/${boards.length}...",
-        "Nome: ${name.isNotEmpty ? name : 'Desconhecido'}\nMAC: ${board.device.remoteId.str}",
-      );
-
-      final err = await _operateOnBoard(board.device, (services) async {
-        final ssidChar  = _findChar(services, SERVICE_UUID, UUID_SSID);
-        final passChar  = _findChar(services, SERVICE_UUID, UUID_PASS);
-        final ipChar    = _findChar(services, SERVICE_UUID, UUID_SERVERIP);
-
-        if (ssidChar == null || passChar == null || ipChar == null) {
-          throw Exception("Características BLE não encontradas");
+              if (configuredCount >= 2) {
+                FlutterBluePlus.stopScan();
+                if (mounted) {
+                  setState(() {
+                    statusMessage = "✅ Sucesso! As duas placas foram configuradas.";
+                    isSending = false;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
+                  );
+                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+                }
+              }
+            } catch (e) {
+              configuredMacs.remove(mac);
+            }
+            
+            isConnecting = false;
+            break;
+          }
         }
-
-        await ssidChar.write(utf8.encode(_ssidController.text));
-        await passChar.write(utf8.encode(_passController.text));
-
-        String ipEnvio = _ipController.text;
-        if (!ipEnvio.contains(':')) ipEnvio += ":8080";
-        await ipChar.write(utf8.encode(ipEnvio));
       });
 
-      results.add(_BoardResult(
-        mac: board.device.remoteId.str,
-        name: name.isNotEmpty ? name : "Placa",
-        success: err == null,
-        errorMsg: err,
-      ));
+      await Future.delayed(const Duration(seconds: 15));
+      
+      if (configuredCount < 2) {
+        FlutterBluePlus.stopScan();
+        if (mounted) {
+          setState(() {
+            isSending = false;
+            statusMessage = configuredCount == 1 
+                ? "⚠️ Apenas 1 placa foi configurada. Tente de novo." 
+                : "❌ Nenhuma placa foi encontrada.";
+          });
+        }
+      }
+      subscription.cancel();
 
-      // Delay entre placas: dá tempo à placa configurada para iniciar o
-      // restart sem interferir com a ligação à placa seguinte
-      if (i < boards.length - 1) {
-        await Future.delayed(const Duration(seconds: 3));
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          isSending = false;
+          statusMessage = "❌ Falha na comunicação Bluetooth.";
+        });
       }
     }
-
-    final succeeded = results.where((r) => r.success).toList();
-    final failed    = results.where((r) => !r.success).toList();
-
-    String title;
-    String detail;
-    bool isErr = false;
-
-    if (succeeded.isEmpty) {
-      title = "❌ Falha na configuração";
-      detail = "Nenhuma placa foi configurada com sucesso.\n"
-          + failed.map((r) => "• ${r.name} (${r.mac}): ${r.errorMsg}").join("\n");
-      isErr = true;
-    } else if (failed.isEmpty) {
-      title = succeeded.length == 1
-          ? "✅ 1 placa configurada com sucesso"
-          : "✅ ${succeeded.length} placas configuradas com sucesso";
-      detail = succeeded.map((r) => "• ${r.name} (${r.mac})").join("\n");
-    } else {
-      title = "⚠️ Configuração parcial";
-      detail = "Sucesso (${succeeded.length}):\n"
-          + succeeded.map((r) => "• ${r.name} (${r.mac})").join("\n")
-          + "\n\nFalha (${failed.length}):\n"
-          + failed.map((r) => "• ${r.name} (${r.mac}): ${r.errorMsg}").join("\n");
-      isErr = true;
-    }
-
-    _setStatus(title, detail, error: isErr);
-    setState(() => isSending = false);
-  }
-
-  // ── ALTERAÇÃO 4: _enviarComandoBLE com as mesmas melhorias ─────────────────
-  Future<void> _enviarComandoBLE(String comando) async {
-    setState(() { isSending = true; _isError = false; });
-
-    final String labelComando = comando == "RESET" ? "DESLIGAR" : "LIGAR";
-    _setStatus("A procurar placas...", "A fazer scan Bluetooth (20s) para comando $labelComando");
-
-    final boards = await _scanForBoards(20);
-
-    if (boards.isEmpty) {
-      if (comando == "RESET") {
-        _setStatus(
-          "⚠️ Placas não encontradas via Bluetooth",
-          "As placas parecem estar ligadas ao Wi-Fi e não estão acessíveis via Bluetooth.\n"
-          "Para as desligar, retire a alimentação ou ligue-se diretamente.",
-          error: true,
-        );
-      } else {
-        _setStatus(
-          "✅ Placas já estão ligadas",
-          "Nenhuma placa encontrada em modo Bluetooth.\nAs placas já estão ativas e ligadas à rede.",
-        );
-      }
-      setState(() => isSending = false);
-      return;
-    }
-
-    _setStatus(
-      "A enviar comando $labelComando...",
-      "${boards.length} placa(s) encontrada(s). A enviar...",
-    );
-
-    await Future.delayed(const Duration(seconds: 1));
-
-    final results = <_BoardResult>[];
-    for (int i = 0; i < boards.length; i++) {
-      final board = boards[i];
-      final name = board.device.advName.isNotEmpty
-          ? board.device.advName
-          : board.advertisementData.advName;
-
-      _setStatus(
-        "A enviar $labelComando a placa ${i + 1}/${boards.length}...",
-        "MAC: ${board.device.remoteId.str}",
-      );
-
-      final err = await _operateOnBoard(board.device, (services) async {
-        final ssidChar = _findChar(services, SERVICE_UUID, UUID_SSID);
-        if (ssidChar == null) throw Exception("Característica SSID não encontrada");
-        await ssidChar.write(utf8.encode(comando));
-      });
-
-      results.add(_BoardResult(
-        mac: board.device.remoteId.str,
-        name: name.isNotEmpty ? name : "Placa",
-        success: err == null,
-        errorMsg: err,
-      ));
-
-      if (i < boards.length - 1) {
-        await Future.delayed(const Duration(seconds: 3));
-      }
-    }
-
-    final succeeded = results.where((r) => r.success).toList();
-    final failed    = results.where((r) => !r.success).toList();
-
-    String title;
-    String detail;
-    bool isErr = false;
-
-    if (succeeded.isEmpty) {
-      title = "❌ Falha ao enviar comando";
-      detail = "O comando $labelComando não chegou a nenhuma placa.\n"
-          + failed.map((r) => "• ${r.name} (${r.mac}): ${r.errorMsg}").join("\n");
-      isErr = true;
-    } else if (failed.isEmpty) {
-      title = succeeded.length == 1
-          ? "✅ Comando $labelComando enviado a 1 placa"
-          : "✅ Comando $labelComando enviado a ${succeeded.length} placas";
-      detail = succeeded.map((r) => "• ${r.name} (${r.mac})").join("\n");
-    } else {
-      title = "⚠️ Comando parcialmente enviado";
-      detail = "Sucesso (${succeeded.length}):\n"
-          + succeeded.map((r) => "• ${r.name} (${r.mac})").join("\n")
-          + "\n\nFalha (${failed.length}):\n"
-          + failed.map((r) => "• ${r.name} (${r.mac}): ${r.errorMsg}").join("\n");
-      isErr = true;
-    }
-
-    _setStatus(title, detail, error: isErr);
-    setState(() => isSending = false);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Configuração & Controlo"), backgroundColor: Colors.transparent),
+      appBar: AppBar(title: const Text("Configurar Wi-Fi"), backgroundColor: Colors.transparent),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(30),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Alvo Bluetooth: ${widget.targetName}", 
+            Text("Alvo: ${widget.targetName}", 
                  style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
             const SizedBox(height: 30),
             
@@ -1768,14 +1583,14 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             TextField(
               controller: _ipController,
               decoration: InputDecoration(
-                labelText: "IP do Computador / Cloud", 
+                labelText: "IP do Computador", 
                 filled: true, 
                 fillColor: AppColors.surface, 
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
               ),
             ),
             
-            const SizedBox(height: 25),
+            const SizedBox(height: 40),
             
             SizedBox(
               width: double.infinity,
@@ -1789,113 +1604,18 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                 ),
                 child: isSending 
                     ? const CircularProgressIndicator(color: Colors.black) 
-                    : const Text("ENVIAR CREDENCIAIS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    : const Text("ENVIAR PARA AS PLACAS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               ),
             ),
             
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
-              child: Divider(color: Colors.white10, thickness: 2),
-            ),
-
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: isSending ? null : () => _enviarComandoBLE("ON"),
-                    icon: const Icon(Icons.power_settings_new),
-                    label: const Text("LIGAR"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success, 
-                      foregroundColor: Colors.white, 
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 15),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: isSending ? null : () => _enviarComandoBLE("RESET"),
-                    icon: const Icon(Icons.power_off),
-                    label: const Text("DESLIGAR"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.danger, 
-                      foregroundColor: Colors.white, 
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              "* DESLIGAR apaga as credenciais Wi-Fi e coloca as placas a dormir.\n"
-              "* LIGAR reinicia as placas para modo de operação normal.\n"
-              "* Os botões só funcionam enquanto as placas estiverem em modo Bluetooth.",
-              style: TextStyle(color: Colors.white24, fontSize: 11),
-              textAlign: TextAlign.center,
-            ),
-
             const SizedBox(height: 30),
-
-            // ── Área de resultado ──────────────────────────────────────────
-            if (_statusTitle.isNotEmpty)
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
-                width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: _isError
-                      ? AppColors.danger.withOpacity(0.12)
-                      : AppColors.success.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _isError
-                        ? AppColors.danger.withOpacity(0.4)
-                        : AppColors.success.withOpacity(0.4),
-                    width: 1.5,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _statusTitle,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                        color: _isError ? AppColors.danger : AppColors.success,
-                      ),
-                    ),
-                    if (_statusDetail.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        _statusDetail,
-                        style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-
-            if (isSending) ...[
-              const SizedBox(height: 20),
-              Center(
-                child: Column(
-                  children: [
-                    const CircularProgressIndicator(color: AppColors.primary),
-                    const SizedBox(height: 12),
-                    Text(
-                      _statusDetail,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white54, fontSize: 13),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+            Center(
+              child: Text(
+                statusMessage, 
+                textAlign: TextAlign.center, 
+                style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70)
+              )
+            ),
           ],
         ),
       ),
