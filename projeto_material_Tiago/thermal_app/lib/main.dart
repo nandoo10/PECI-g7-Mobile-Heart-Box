@@ -1438,77 +1438,80 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
 Future<void> _enviarDadosBLE() async {
     await SessionManager.setServerIp(_ipController.text);
     
-    // O targetName aqui será "esp32s3/esp32cam"
-    List<String> alvos = widget.targetName.split('/');
-    Map<String, bool> configurados = { for (var a in alvos) a: false };
+    // Nome do QR Code limpo
+    String alvo = widget.targetName.trim().toLowerCase();
 
     setState(() {
       isSending = true;
-      statusMessage = "A procurar os alvos: ${alvos.join(', ')}...";
+      statusMessage = "A procurar placa: $alvo...";
     });
 
     try {
-      // Scan mais longo para garantir que apanha as duas
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 25));
+      // CORRIGIDO: Removido o parâmetro 'androidUsesLocation' que causava erro
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
-      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+      // Ouvir os resultados em tempo real
+      var subscription = FlutterBluePlus.onScanResults.listen((results) async {
         for (ScanResult r in results) {
-          String name = r.device.platformName.isEmpty ? r.advertisementData.advName : r.device.platformName;
+          // Obtém o nome de várias formas para garantir compatibilidade
+          String name = r.device.platformName.isEmpty 
+              ? (r.advertisementData.advName.isEmpty ? "Desconhecido" : r.advertisementData.advName)
+              : r.device.platformName;
           
-          if (configurados.containsKey(name) && configurados[name] == false) {
-            configurados[name] = true; // Reserva esta placa
+          debugPrint("Avistada placa: ${name.toLowerCase()}"); 
+
+          if (name.toLowerCase().contains(alvo)) {
+            await FlutterBluePlus.stopScan();
             
-            setState(() => statusMessage = "Configurando $name...");
+            setState(() => statusMessage = "A ligar a $name...");
             
             try {
-              await r.device.connect(timeout: const Duration(seconds: 8));
+              await r.device.connect(timeout: const Duration(seconds: 10), autoConnect: false);
+              await Future.delayed(const Duration(milliseconds: 500));
+              
               List<BluetoothService> services = await r.device.discoverServices();
               
               for (var s in services) {
-                // Aceita qualquer um dos dois UUIDs de serviço
-                if (s.uuid.str.toLowerCase() == SERVICE_UUID_S3.toLowerCase() || 
-                    s.uuid.str.toLowerCase() == SERVICE_UUID_CAM.toLowerCase()) {
-                  
-                  for (var c in s.characteristics) {
-                    if (c.uuid.str.toLowerCase() == UUID_SSID.toLowerCase()) {
-                      await c.write(utf8.encode(_ssidController.text));
-                    }
-                    if (c.uuid.str.toLowerCase() == UUID_PASS.toLowerCase()) {
-                      await c.write(utf8.encode(_passController.text));
-                    }
-                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP.toLowerCase()) {
-                      await c.write(utf8.encode(_ipController.text));
-                    }
+                for (var c in s.characteristics) {
+                  String cUuid = c.uuid.str.toLowerCase();
+                  if (cUuid == UUID_SSID.toLowerCase()) {
+                    await c.write(utf8.encode(_ssidController.text));
+                  } else if (cUuid == UUID_PASS.toLowerCase()) {
+                    await c.write(utf8.encode(_passController.text));
+                  } else if (cUuid == UUID_SERVERIP.toLowerCase()) {
+                    await c.write(utf8.encode(_ipController.text));
                   }
                 }
               }
+              
               await r.device.disconnect();
               
-              int total = configurados.values.where((v) => v == true).length;
-              setState(() => statusMessage = "✅ $name OK ($total/${alvos.length})");
-              
-              if (total == alvos.length) {
-                FlutterBluePlus.stopScan();
-                setState(() => isSending = false);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Todas as placas configuradas!")));
+              if (mounted) {
+                setState(() {
+                  isSending = false;
+                  statusMessage = "✅ $name configurada!";
+                });
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$name configurada!"), backgroundColor: AppColors.success));
                 Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
               }
             } catch (e) {
-              configurados[name] = false; // Falhou, tenta no próximo scan
+              debugPrint("Erro na conexão: $e");
+              FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
             }
           }
         }
       });
 
-      await Future.delayed(const Duration(seconds: 25));
+      await Future.delayed(const Duration(seconds: 15));
       if (isSending) {
-        FlutterBluePlus.stopScan();
+        await FlutterBluePlus.stopScan();
         setState(() {
           isSending = false;
-          statusMessage = "❌ Falhou. Verifique se as placas estão em modo Configuração.";
+          statusMessage = "❌ Placa não encontrada.\nVerifica se a placa está em modo de configuração.";
         });
       }
       subscription.cancel();
+
     } catch (e) {
       setState(() { isSending = false; statusMessage = "Erro: $e"; });
     }
