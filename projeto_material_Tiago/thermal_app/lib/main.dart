@@ -3,16 +3,16 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Para o Alerta Sonoro e Vibração
-import 'package:url_launcher/url_launcher.dart'; // Para ligar para o número
+import 'package:flutter/services.dart'; 
+import 'package:url_launcher/url_launcher.dart'; 
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_map/flutter_map.dart'; 
 import 'package:latlong2/latlong.dart'; 
 import 'package:shared_preferences/shared_preferences.dart'; 
-import 'package:mobile_scanner/mobile_scanner.dart'; // Para o Leitor de QR Code
-import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // FASE 3: Para o Bluetooth
+import 'package:mobile_scanner/mobile_scanner.dart'; 
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; 
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,12 +29,12 @@ class SessionManager {
   static String activityType = "Caminhada";
   static DateTime? startTime; 
   static List<double> temps = [];
-  static List<int> bpms = []; // ✅ NOVO: lista de BPMs da sessão
+  static List<int> bpms = []; 
   static double lastLat = 39.3999;
   static double lastLon = -8.2245;
   static List<LatLng> route = [];
   static double distance = 0.0;
-  static String serverIp = ""; // IP dinâmico
+  static String serverIp = ""; 
 
   static Future<void> init() async {
     prefs = await SharedPreferences.getInstance();
@@ -50,7 +50,6 @@ class SessionManager {
       temps = decoded.map((e) => (e as num).toDouble()).toList();
     }
 
-    // ✅ NOVO: Recuperar BPMs guardados
     String? bpmsJson = prefs.getString('bpms');
     if (bpmsJson != null) {
       List<dynamic> decoded = jsonDecode(bpmsJson);
@@ -78,27 +77,27 @@ class SessionManager {
     activityType = type;
     startTime = DateTime.now();
     temps = [];
-    bpms = []; // ✅ NOVO: reset dos BPMs
+    bpms = []; 
     route = [];
     distance = 0.0;
     await prefs.setBool('hasActiveSession', true);
     await prefs.setString('activityType', type);
     await prefs.setString('startTime', startTime!.toIso8601String());
     await prefs.setString('temps', '[]');
-    await prefs.setString('bpms', '[]'); // ✅ NOVO
+    await prefs.setString('bpms', '[]'); 
     await prefs.setString('route', '[]');
     await prefs.setDouble('distance', 0.0);
   }
 
   static Future<void> saveProgress(List<double> t, List<int> b, double la, double lo, List<LatLng> r, double d) async {
     temps = List.from(t);
-    bpms = List.from(b); // ✅ NOVO
+    bpms = List.from(b); 
     lastLat = la;
     lastLon = lo;
     route = List.from(r);
     distance = d;
     await prefs.setString('temps', jsonEncode(temps));
-    await prefs.setString('bpms', jsonEncode(bpms)); // ✅ NOVO
+    await prefs.setString('bpms', jsonEncode(bpms)); 
     await prefs.setDouble('lastLat', la);
     await prefs.setDouble('lastLon', lo);
     await prefs.setString('route', jsonEncode(route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList()));
@@ -109,7 +108,7 @@ class SessionManager {
     hasActiveSession = false;
     startTime = null;
     temps = [];
-    bpms = []; // ✅ NOVO
+    bpms = []; 
     route = [];
     distance = 0.0;
     await prefs.clear(); 
@@ -126,9 +125,6 @@ class SessionManager {
   }
 }
 
-////////////////////////////////////////////////////
-/// 🎨 DESIGN SYSTEM
-////////////////////////////////////////////////////
 class AppColors {
   static const primary = Color(0xFF00D1FF);
   static const secondary = Color(0xFF6366F1);
@@ -295,7 +291,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               distExtraida = double.tryParse(item['distance'].toString()) ?? 0.0;
             }
 
-            // ✅ CORRIGIDO: lê 'bpm_history' em vez de 'bpm_readings'
             List<int> bpmExtraidos = [];
             var rawBpm = item['bpm_history'];
             if (rawBpm is List) {
@@ -351,14 +346,13 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // ABA 0: CONFIGURAÇÕES (COM LEITOR QR)
       Center(
         child: ElevatedButton.icon(
           onPressed: () {
             Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
           },
           icon: const Icon(Icons.qr_code_scanner, size: 30),
-          label: const Text("Configurar Nova Placa (Wi-Fi)"),
+          label: const Text("Configurar / Controlar Placa via QR"),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
             backgroundColor: AppColors.primary,
@@ -366,8 +360,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
           ),
         ),
       ),
-      
-      // ABA 1: DASHBOARD
       Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -391,8 +383,6 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
           ],
         ),
       ),
-      
-      // ABA 2: HISTÓRICO
       RefreshIndicator(
         onRefresh: buscarHistoricoDoPC,
         child: ActivityLogScreen(activities: activitiesList, onRefresh: buscarHistoricoDoPC),
@@ -478,7 +468,7 @@ class MonitorScreen extends StatefulWidget {
 class _MonitorScreenState extends State<MonitorScreen> {
   MqttServerClient? client;
   List<double> allTemps = [];
-  List<int> allBpms = []; // ✅ NOVO: lista acumuladora de BPMs
+  List<int> allBpms = []; 
   double currentTemp = 0;
   
   double lat = 39.3999;
@@ -504,7 +494,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
-  // Variáveis ECG / BPM
   List<double> ecgPoints = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
@@ -518,7 +507,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       SessionManager.start(widget.atividade);
     } else {
       allTemps = SessionManager.temps;
-      allBpms = SessionManager.bpms; // ✅ NOVO: recuperar BPMs da sessão
+      allBpms = SessionManager.bpms; 
       lat = SessionManager.lastLat;
       lon = SessionManager.lastLon;
       route = SessionManager.route;
@@ -533,7 +522,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && !isPaused) {
         setState(() { seconds = SessionManager.elapsedSeconds; });
-        // ✅ CORRIGIDO: passa allBpms para o saveProgress
         SessionManager.saveProgress(allTemps, allBpms, lat, lon, route, distance);
       }
     });
@@ -635,7 +623,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             int newBpm = int.tryParse(payload) ?? 0;
             currentBpm = newBpm;
             if (newBpm > 0) {
-              allBpms.add(newBpm); // ✅ NOVO: acumula o BPM na lista
+              allBpms.add(newBpm); 
               _triggerHeartBlink();
             }
           }
@@ -767,7 +755,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             "temperatures": allTemps,
             "distance": distance,
             "route": route.map((p) => {'lat': p.latitude, 'lon': p.longitude}).toList(),
-            "bpm_history": allBpms, // ✅ NOVO: envia os BPMs ao guardar
+            "bpm_history": allBpms, 
           }),
         );
       } catch (e) { print(e); }
@@ -1027,9 +1015,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
   Widget _buildProximityBox() {
     bool isDanger = proximityStatus == "OBSTACULO_PERTO";
-    Color iconColor = isDanger 
-        ? (blinkState ? AppColors.danger : Colors.black) 
-        : AppColors.success;
+    Color iconColor = isDanger ? (blinkState ? AppColors.danger : Colors.black) : AppColors.success;
     String label = isDanger ? "Perigo!" : "Livre!";
 
     return Expanded(
@@ -1132,7 +1118,6 @@ class ActivityDetailScreen extends StatelessWidget {
     LatLngBounds? routeBounds;
     if (activity.route.length >= 2) routeBounds = LatLngBounds.fromPoints(activity.route);
 
-    // Cálculos BPM
     final List<int> validBpms = activity.bpmReadings.where((b) => b > 0).toList();
     final int bpmMin = validBpms.isNotEmpty ? validBpms.reduce((a, b) => a < b ? a : b) : 0;
     final int bpmMax = validBpms.isNotEmpty ? validBpms.reduce((a, b) => a > b ? a : b) : 0;
@@ -1155,7 +1140,6 @@ class ActivityDetailScreen extends StatelessWidget {
         body: TabBarView(
           physics: const NeverScrollableScrollPhysics(),
           children: [
-            // ABA TEMPERATURA
             Column(
               children: [
                 Padding(padding: const EdgeInsets.all(20), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [_detBox("MIN", "${activity.min.toStringAsFixed(1)}°"), _detBox("AVG", "${activity.avg.toStringAsFixed(1)}°"), _detBox("MAX", "${activity.max.toStringAsFixed(1)}°")])),
@@ -1203,7 +1187,6 @@ class ActivityDetailScreen extends StatelessWidget {
                 const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Text("Deslize para ver o gráfico", style: TextStyle(color: Colors.white24, fontSize: 10))),
               ],
             ),
-            // ABA PERCURSO
             Column(
               children: [
                 Expanded(
@@ -1229,7 +1212,6 @@ class ActivityDetailScreen extends StatelessWidget {
                 const SizedBox(height: 20),
               ],
             ),
-            // ABA BPM
             Padding(
               padding: const EdgeInsets.all(24),
               child: validBpms.isEmpty
@@ -1330,9 +1312,6 @@ class ActivityData {
   ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0, this.bpmReadings = const []});
 }
 
-////////////////////////////////////////////////////
-/// 📷 ECRÃ DO LEITOR DE QR CODE (FASE 2)
-////////////////////////////////////////////////////
 class QRScannerScreen extends StatefulWidget {
   const QRScannerScreen({super.key});
 
@@ -1398,9 +1377,6 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
   }
 }
 
-////////////////////////////////////////////////////
-/// 📶 ECRÃ DE CONFIGURAÇÃO WI-FI E BLE (FASE 3)
-////////////////////////////////////////////////////
 class WifiConfigScreen extends StatefulWidget {
   final String targetName;
   const WifiConfigScreen({super.key, required this.targetName});
@@ -1418,10 +1394,12 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   bool _obscurePassword = true;
   String statusMessage = "Preencha os dados e clique em Enviar";
 
-  final String SERVICE_UUID = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
   final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
   final String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
+
+  final String SERVICE_UUID_S3 = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
+  final String SERVICE_UUID_CAM = "f4b82d49-43c2-48df-b3f5-7ba9e0231908";
 
   @override
   void initState() {
@@ -1450,7 +1428,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         for (ScanResult r in results) {
           String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
           
-          if (devName.contains("THERMAL_CAM") || devName.contains(widget.targetName)) {
+          if (devName.contains(widget.targetName)) {
             String mac = r.device.remoteId.str;
             if (configuredMacs.contains(mac)) continue;
             
@@ -1464,7 +1442,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
               
               List<BluetoothService> services = await r.device.discoverServices();
               for (var service in services) {
-                if (service.uuid.str.toLowerCase() == SERVICE_UUID) {
+                if (service.uuid.str.toLowerCase() == SERVICE_UUID_S3 || service.uuid.str.toLowerCase() == SERVICE_UUID_CAM) {
                   for (var c in service.characteristics) {
                     if (c.uuid.str.toLowerCase() == UUID_SSID) {
                       await c.write(utf8.encode(_ssidController.text));
@@ -1518,9 +1496,11 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         if (mounted) {
           setState(() {
             isSending = false;
-            statusMessage = configuredCount == 1 
-                ? "⚠️ Apenas 1 placa foi configurada. Tente de novo." 
-                : "❌ Nenhuma placa foi encontrada.";
+            if (configuredCount == 0) {
+              statusMessage = "✅ As placas já estão conectadas à rede Wi-Fi!";
+            } else {
+              statusMessage = "⚠️ Apenas 1 placa foi configurada. A outra já deve estar conectada.";
+            }
           });
         }
       }
