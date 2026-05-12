@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' as ui; // NOVO: Usado para o efeito Blur e CustomPaint
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; 
@@ -352,7 +353,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
             Navigator.push(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
           },
           icon: const Icon(Icons.qr_code_scanner, size: 30),
-          label: const Text("Configurar / Controlar Placa via QR"),
+          label: const Text("Configurar Placa via QR"),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
             backgroundColor: AppColors.primary,
@@ -485,7 +486,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
   int seconds = 0;
   bool showThermal = false; 
   bool showMap = false; 
-  Uint8List? imageBytes;
+  
+  // NOVO: Recebe matriz bruta em vez de imagem
+  List<int>? rawThermalData;
+
   final MapController _mapController = MapController();
 
   bool isShowingFallAlert = false;
@@ -556,7 +560,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       await client!.connect();
       setState(() => connected = true);
       client!.subscribe('heartbox/sensor/thermal', MqttQos.atMostOnce);
-      client!.subscribe('heartbox/cam/image', MqttQos.atMostOnce);
+      client!.subscribe('heartbox/cam/thermal_raw', MqttQos.atMostOnce); // NOVO
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
@@ -566,6 +570,17 @@ class _MonitorScreenState extends State<MonitorScreen> {
       client!.updates?.listen((c) {
         final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
         final String topic = c[0].topic;
+
+        // NOVO: Apanhar a matriz térmica em formato de bytes e sair
+        if (topic == 'heartbox/cam/thermal_raw') {
+          if (mounted && showThermal) {
+            setState(() {
+              rawThermalData = recMess.payload.message;
+            });
+          }
+          return; // Para não ser lido como string
+        }
+
         final String payload = String.fromCharCodes(recMess.payload.message);
 
         if (!mounted) return;
@@ -587,8 +602,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
           if (topic == 'heartbox/sensor/thermal') {
             currentTemp = double.tryParse(payload) ?? currentTemp;
             allTemps.add(currentTemp);
-          } else if (topic == 'heartbox/cam/image' && showThermal) {
-            imageBytes = base64Decode(payload);
           } else if (topic == 'heartbox/gps/coords') {
             if (payload == "Sem sinal GPS" || payload.contains("não detetado") || payload.isEmpty) {
               hasGpsSignal = false;
@@ -1039,7 +1052,23 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  Widget _buildThermalWidget() => imageBytes != null ? Image.memory(imageBytes!, fit: BoxFit.contain, gaplessPlayback: true) : const Center(child: Text("A aguardar vídeo..."));
+  // NOVO: Renderiza a matriz bruta na APP nativamente
+  Widget _buildThermalWidget() {
+    if (rawThermalData == null || rawThermalData!.length != 3072) {
+      return const Center(child: Text("A aguardar matriz térmica...", style: TextStyle(color: Colors.white38)));
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(25),
+      child: ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8), // Efeito de Blur super suave
+        child: CustomPaint(
+          size: const Size(double.infinity, double.infinity),
+          painter: ThermalPainter(rawThermalData!),
+        ),
+      ),
+    );
+  }
+  
   Widget _buildMiniBox(String l, String v, IconData i) => Expanded(child: Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(25)), child: Row(children: [Icon(i, color: AppColors.primary, size: 20), const SizedBox(width: 12), Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(l, style: const TextStyle(color: Colors.white38, fontSize: 11)), Text(v, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))])])));
   Widget _buildGPSStatusBox() => Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20)), child: Row(children: [const Icon(Icons.gps_fixed, color: AppColors.success, size: 18), const SizedBox(width: 15), Text("GPS | Dist: ${distance.toStringAsFixed(0)}m", style: const TextStyle(fontFamily: 'monospace', fontSize: 14, fontWeight: FontWeight.bold))]));
   String _formatTime(int s) => "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
@@ -1611,4 +1640,66 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
       ),
     );
   }
+}
+
+// NOVO: Classe que converte a matriz de 3072 bytes (float) numa imagem desenhada no ecrã
+class ThermalPainter extends CustomPainter {
+  final List<int> rawBytes;
+  ThermalPainter(this.rawBytes);
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    final byteData = ByteData.sublistView(Uint8List.fromList(rawBytes));
+    List<double> temps = List.filled(768, 0);
+    double minT = 1000, maxT = -1000;
+    
+    // Ler os 768 floats em Little Endian
+    for(int i = 0; i < 768; i++) {
+      double t = byteData.getFloat32(i * 4, Endian.little);
+      temps[i] = t;
+    }
+
+    // Calcular min e max reais para normalização das cores
+    double sum = 0;
+    int count = 0;
+    for (double t in temps) {
+      if (t >= 15 && t <= 60) {
+        if (t < minT) minT = t;
+        if (t > maxT) maxT = t;
+        sum += t;
+        count++;
+      }
+    }
+    double avg = count > 0 ? sum / count : 25.0;
+
+    double cellW = size.width / 32;
+    double cellH = size.height / 24;
+    
+    // Desenhar a grelha píxel a píxel
+    for(int y = 0; y < 24; y++) {
+       for(int x = 0; x < 32; x++) {
+          double t = temps[y * 32 + x];
+          if (t < 15 || t > 60) t = avg; // Limpeza de píxeis mortos
+          
+          double normalized = maxT > minT ? (t - minT) / (maxT - minT) : 0;
+          if(normalized < 0) normalized = 0;
+          if(normalized > 1) normalized = 1;
+          
+          Color c = _getColor(normalized);
+          // O +1 na largura/altura evita "linhas pretas" entre os retângulos
+          canvas.drawRect(Rect.fromLTWH(x * cellW, y * cellH, cellW + 1, cellH + 1), Paint()..color = c);
+       }
+    }
+  }
+
+  // Mapa de calor (Azul -> Ciano -> Verde -> Amarelo -> Vermelho)
+  Color _getColor(double v) {
+    if (v < 0.25) return Color.lerp(Colors.blue, Colors.cyan, v / 0.25)!;
+    if (v < 0.50) return Color.lerp(Colors.cyan, Colors.green, (v - 0.25) / 0.25)!;
+    if (v < 0.75) return Color.lerp(Colors.green, Colors.yellow, (v - 0.50) / 0.25)!;
+    return Color.lerp(Colors.yellow, Colors.red, (v - 0.75) / 0.25)!;
+  }
+
+  @override
+  bool shouldRepaint(ThermalPainter old) => true;
 }
