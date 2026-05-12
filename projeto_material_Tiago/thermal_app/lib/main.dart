@@ -1426,9 +1426,17 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
         if (isConnecting) return;
 
         for (ScanResult r in results) {
-          String devName = r.device.advName.isNotEmpty ? r.device.advName : r.advertisementData.advName;
+          String devName = r.device.platformName.isNotEmpty ? r.device.platformName : (r.advertisementData.advName.isNotEmpty ? r.advertisementData.advName : "");
           
-          if (devName.contains(widget.targetName)) {
+          bool isOurBoard = devName.contains(widget.targetName.trim()) || devName.contains("Heart_Box");
+          
+          for (var uuid in r.advertisementData.serviceUuids) {
+            if (uuid.str.toLowerCase() == SERVICE_UUID_S3 || uuid.str.toLowerCase() == SERVICE_UUID_CAM) {
+              isOurBoard = true;
+            }
+          }
+
+          if (isOurBoard) {
             String mac = r.device.remoteId.str;
             if (configuredMacs.contains(mac)) continue;
             
@@ -1497,7 +1505,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
           setState(() {
             isSending = false;
             if (configuredCount == 0) {
-              statusMessage = "✅ As placas já estão conectadas à rede Wi-Fi!";
+              statusMessage = "❌ Placas não encontradas.\n(Se já estiverem no Wi-Fi, pode fechar este ecrã)";
             } else {
               statusMessage = "⚠️ Apenas 1 placa foi configurada. A outra já deve estar conectada.";
             }
