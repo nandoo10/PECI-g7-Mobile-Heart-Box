@@ -487,7 +487,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool showThermal = false; 
   bool showMap = false; 
   
-  // NOVO: Recebe matriz bruta em vez de imagem
   List<int>? rawThermalData;
 
   final MapController _mapController = MapController();
@@ -560,7 +559,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       await client!.connect();
       setState(() => connected = true);
       client!.subscribe('heartbox/sensor/thermal', MqttQos.atMostOnce);
-      client!.subscribe('heartbox/cam/thermal_raw', MqttQos.atMostOnce); // NOVO
+      client!.subscribe('heartbox/cam/thermal_raw', MqttQos.atMostOnce);
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
@@ -571,14 +570,13 @@ class _MonitorScreenState extends State<MonitorScreen> {
         final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
         final String topic = c[0].topic;
 
-        // NOVO: Apanhar a matriz térmica em formato de bytes e sair
         if (topic == 'heartbox/cam/thermal_raw') {
           if (mounted && showThermal) {
             setState(() {
               rawThermalData = recMess.payload.message;
             });
           }
-          return; // Para não ser lido como string
+          return;
         }
 
         final String payload = String.fromCharCodes(recMess.payload.message);
@@ -1052,7 +1050,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // NOVO: Renderiza a matriz bruta na APP nativamente
   Widget _buildThermalWidget() {
     if (rawThermalData == null || rawThermalData!.length != 3072) {
       return const Center(child: Text("A aguardar matriz térmica...", style: TextStyle(color: Colors.white38)));
@@ -1060,7 +1057,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(25),
       child: ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8), // Efeito de Blur super suave
+        imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
         child: CustomPaint(
           size: const Size(double.infinity, double.infinity),
           painter: ThermalPainter(rawThermalData!),
@@ -1423,11 +1420,13 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   bool _obscurePassword = true;
   String statusMessage = "Preencha os dados e clique em Enviar";
 
-  final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
-  final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
+  // UUIDs partilhados pelas duas placas (escritas de configuração)
+  final String UUID_SSID     = "ab35e54e-fde4-4f83-902a-07785de547b9";
+  final String UUID_PASS     = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
   final String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
 
-  final String SERVICE_UUID_S3 = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
+  // SERVICE UUIDs exclusivos de cada placa — usados para deteção fiável
+  final String SERVICE_UUID_S3  = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String SERVICE_UUID_CAM = "f4b82d49-43c2-48df-b3f5-7ba9e0231908";
 
   @override
@@ -1438,120 +1437,148 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
 
   Future<void> _enviarDadosBLE() async {
     await SessionManager.setServerIp(_ipController.text);
-    
+
     setState(() {
       isSending = true;
-      statusMessage = "A procurar as placas (${widget.targetName})...";
+      statusMessage = "A fazer scan BLE (10 segundos)...";
     });
 
     try {
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+      // ── 1. Scan completo: recolhe todos os dispositivos durante 10 segundos ──
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+      await Future.delayed(const Duration(seconds: 10));
+      await FlutterBluePlus.stopScan();
 
-      int configuredCount = 0;
-      Set<String> configuredMacs = {};
-      bool isConnecting = false;
-      
-      var subscription = FlutterBluePlus.scanResults.listen((results) async {
-        if (isConnecting) return;
+      // ── 2. Filtrar apenas as nossas placas ──
+      // Critério principal: SERVICE UUID anunciado (mais fiável que o nome)
+      // Critério de fallback: nome BLE contém "Heart_Box" ou o targetName do QR
+      List<ScanResult> todasResults = FlutterBluePlus.lastScanResults;
 
-        for (ScanResult r in results) {
-          String devName = r.device.platformName.isNotEmpty ? r.device.platformName : (r.advertisementData.advName.isNotEmpty ? r.advertisementData.advName : "");
-          
-          bool isOurBoard = devName.contains(widget.targetName.trim()) || devName.contains("Heart_Box");
-          
-          for (var uuid in r.advertisementData.serviceUuids) {
-            if (uuid.str.toLowerCase() == SERVICE_UUID_S3 || uuid.str.toLowerCase() == SERVICE_UUID_CAM) {
-              isOurBoard = true;
-            }
-          }
-
-          if (isOurBoard) {
-            String mac = r.device.remoteId.str;
-            if (configuredMacs.contains(mac)) continue;
-            
-            isConnecting = true;
-            configuredMacs.add(mac);
-
-            setState(() => statusMessage = "Placa encontrada. A configurar ($mac)...");
-            
-            try {
-              await r.device.connect(timeout: const Duration(seconds: 5));
-              
-              List<BluetoothService> services = await r.device.discoverServices();
-              for (var service in services) {
-                if (service.uuid.str.toLowerCase() == SERVICE_UUID_S3 || service.uuid.str.toLowerCase() == SERVICE_UUID_CAM) {
-                  for (var c in service.characteristics) {
-                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
-                      await c.write(utf8.encode(_ssidController.text));
-                    }
-                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
-                      await c.write(utf8.encode(_passController.text));
-                    }
-                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                      String ipEnvio = _ipController.text;
-                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
-                      await c.write(utf8.encode(ipEnvio));
-                    }
-                  }
-                }
-              }
-
-              await r.device.disconnect();
-              configuredCount++;
-              
-              if (mounted) {
-                setState(() => statusMessage = "✅ Configurado: $configuredCount/2 placas");
-              }
-
-              if (configuredCount >= 2) {
-                FlutterBluePlus.stopScan();
-                if (mounted) {
-                  setState(() {
-                    statusMessage = "✅ Sucesso! As duas placas foram configuradas.";
-                    isSending = false;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Ambas as placas configuradas!"), backgroundColor: AppColors.success)
-                  );
-                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
-                }
-              } else {
-                await Future.delayed(const Duration(seconds: 2));
-              }
-            } catch (e) {
-              configuredMacs.remove(mac);
-            }
-            
-            isConnecting = false;
-            break;
+      List<ScanResult> nossasPlacas = todasResults.where((r) {
+        // Verificar por SERVICE UUID anunciado
+        for (var uuid in r.advertisementData.serviceUuids) {
+          String u = uuid.str.toLowerCase();
+          if (u == SERVICE_UUID_S3.toLowerCase() || u == SERVICE_UUID_CAM.toLowerCase()) {
+            return true;
           }
         }
-      });
+        // Fallback: verificar pelo nome BLE
+        String name = r.device.platformName.isNotEmpty
+            ? r.device.platformName
+            : r.advertisementData.advName;
+        return name.contains("Heart_Box") || name.contains(widget.targetName.trim());
+      }).toList();
 
-      await Future.delayed(const Duration(seconds: 15));
-      
-      if (configuredCount < 2) {
-        FlutterBluePlus.stopScan();
+      if (nossasPlacas.isEmpty) {
+        setState(() {
+          isSending = false;
+          statusMessage = "❌ Nenhuma placa encontrada.\n(Se já estiverem no Wi-Fi, pode fechar este ecrã)";
+        });
+        return;
+      }
+
+      setState(() => statusMessage = "${nossasPlacas.length} placa(s) encontrada(s). A configurar...");
+
+      // ── 3. Configurar cada placa SEQUENCIALMENTE ──
+      int configuredCount = 0;
+      for (ScanResult placa in nossasPlacas) {
+        String mac = placa.device.remoteId.str;
+        setState(() => statusMessage = "A configurar placa $mac...");
+
+        try {
+          await placa.device.connect(timeout: const Duration(seconds: 8));
+          // Pequena pausa para negociação MTU
+          await Future.delayed(const Duration(milliseconds: 500));
+
+          List<BluetoothService> services = await placa.device.discoverServices();
+          bool escreveuIp = false;
+
+          for (var service in services) {
+            String sUuid = service.uuid.str.toLowerCase();
+            if (sUuid == SERVICE_UUID_S3.toLowerCase() || sUuid == SERVICE_UUID_CAM.toLowerCase()) {
+              for (var c in service.characteristics) {
+                String cUuid = c.uuid.str.toLowerCase();
+                try {
+                  if (cUuid == UUID_SSID.toLowerCase()) {
+                    await c.write(utf8.encode(_ssidController.text), withoutResponse: false);
+                    await Future.delayed(const Duration(milliseconds: 300));
+                  }
+                  if (cUuid == UUID_PASS.toLowerCase()) {
+                    await c.write(utf8.encode(_passController.text), withoutResponse: false);
+                    await Future.delayed(const Duration(milliseconds: 300));
+                  }
+                  if (cUuid == UUID_SERVERIP.toLowerCase()) {
+                    // Enviar só o IP — as placas já assumem porta 1883
+                    await c.write(utf8.encode(_ipController.text), withoutResponse: false);
+                    await Future.delayed(const Duration(milliseconds: 300));
+                    escreveuIp = true;
+                  }
+                } catch (e) {
+                  print("Erro ao escrever característica $cUuid na placa $mac: $e");
+                }
+              }
+            }
+          }
+
+          await Future.delayed(const Duration(milliseconds: 500));
+          await placa.device.disconnect();
+
+          if (escreveuIp) {
+            configuredCount++;
+            setState(() => statusMessage = "✅ $configuredCount/${nossasPlacas.length} placa(s) configurada(s)");
+          }
+
+          // Pausa entre placas para não saturar o BT do telemóvel
+          if (configuredCount < nossasPlacas.length) {
+            await Future.delayed(const Duration(seconds: 2));
+          }
+
+        } catch (e) {
+          print("Erro na placa $mac: $e");
+          try { await placa.device.disconnect(); } catch (_) {}
+          setState(() => statusMessage = "⚠️ Falha em $mac. A continuar para a próxima...");
+          await Future.delayed(const Duration(seconds: 1));
+        }
+      }
+
+      // ── 4. Resultado final ──
+      if (configuredCount == nossasPlacas.length) {
+        setState(() {
+          isSending = false;
+          statusMessage = "✅ Sucesso! $configuredCount/${nossasPlacas.length} placa(s) configurada(s).\nAs placas vão reiniciar e ligar ao Wi-Fi.";
+        });
         if (mounted) {
-          setState(() {
-            isSending = false;
-            if (configuredCount == 0) {
-              statusMessage = "❌ Placas não encontradas.\n(Se já estiverem no Wi-Fi, pode fechar este ecrã)";
-            } else {
-              statusMessage = "⚠️ Apenas 1 placa foi configurada. A outra já deve estar conectada.";
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("$configuredCount placa(s) configurada(s) com sucesso!"),
+              backgroundColor: AppColors.success,
+            ),
+          );
+          // Navegar automaticamente para o menu após 2 segundos
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted) {
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const ActivityMenuScreen()),
+                (route) => false,
+              );
             }
           });
         }
-      }
-      subscription.cancel();
-
-    } catch (e) {
-      if (mounted) {
+      } else {
         setState(() {
           isSending = false;
-          statusMessage = "❌ Falha na comunicação Bluetooth.";
+          statusMessage = configuredCount == 0
+              ? "❌ Nenhuma placa foi configurada."
+              : "⚠️ Apenas $configuredCount/${nossasPlacas.length} placa(s) configurada(s).";
         });
       }
+
+    } catch (e) {
+      setState(() {
+        isSending = false;
+        statusMessage = "❌ Falha na comunicação Bluetooth: $e";
+      });
     }
   }
 
@@ -1632,7 +1659,13 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
               child: Text(
                 statusMessage, 
                 textAlign: TextAlign.center, 
-                style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70)
+                style: TextStyle(
+                  color: statusMessage.contains("❌") 
+                      ? AppColors.danger 
+                      : statusMessage.contains("✅") 
+                          ? AppColors.success 
+                          : Colors.white70,
+                )
               )
             ),
           ],
@@ -1642,7 +1675,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   }
 }
 
-// NOVO: Classe que converte a matriz de 3072 bytes (float) numa imagem desenhada no ecrã
+// Converte a matriz de 3072 bytes (768 floats Little Endian) numa imagem desenhada no ecrã
 class ThermalPainter extends CustomPainter {
   final List<int> rawBytes;
   ThermalPainter(this.rawBytes);
