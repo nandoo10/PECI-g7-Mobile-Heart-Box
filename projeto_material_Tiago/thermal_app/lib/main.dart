@@ -1486,6 +1486,8 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                   );
                   Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
                 }
+              } else {
+                await Future.delayed(const Duration(seconds: 2));
               }
             } catch (e) {
               configuredMacs.remove(mac);
