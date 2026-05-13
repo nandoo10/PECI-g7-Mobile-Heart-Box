@@ -36,11 +36,10 @@ class SessionManager {
   static double lastLon = -8.2245;
   static List<LatLng> route = [];
   static double distance = 0.0;
-  static String serverIp = "";
+  static String serverIp = "20.220.169.18";
 
   static Future<void> init() async {
     prefs = await SharedPreferences.getInstance();
-    serverIp = prefs.getString('serverIp') ?? "";
     hasActiveSession = prefs.getBool('hasActiveSession') ?? false;
     activityType = prefs.getString('activityType') ?? "Bicicleta";
     String? st = prefs.getString('startTime');
@@ -338,8 +337,15 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
         title: const Text("Atividade Pendente"),
         content: const Text("Deseja continuar ou começar uma nova?"),
         actions: [
-          TextButton(onPressed: () { SessionManager.clear(); Navigator.pop(ctx); Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityScreen())); }, child: const Text("NOVA", style: TextStyle(color: AppColors.danger))),
-          ElevatedButton(onPressed: () { Navigator.pop(ctx); Navigator.push(context, MaterialPageRoute(builder: (_) => MonitorScreen(atividade: SessionManager.activityType, retomando: true))); }, child: const Text("CONTINUAR")),
+          TextButton(
+            onPressed: () { 
+              SessionManager.clear(); 
+              Navigator.pop(ctx); 
+              // ALTERADO: Vai direto para o MonitorScreen com "Bicicleta"
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const MonitorScreen(atividade: 'Bicicleta'))); 
+            }, 
+            child: const Text("NOVA", style: TextStyle(color: AppColors.danger))
+          ),
         ],
       ),
     );
@@ -371,7 +377,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
                 if (SessionManager.hasActiveSession) {
                   _mostrarDialogoRetomar();
                 } else {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityScreen()));
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const MonitorScreen(atividade: 'Bicicleta')));
                 }
               },
               child: Container(
@@ -381,7 +387,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               ),
             ),
             const SizedBox(height: 20),
-            const Text("INICIAR MONITORIZAÇÃO", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+            const Text("INICIAR ATIVIDADE BICICLETA", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2)),
           ],
         ),
       ),
@@ -503,6 +509,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
   Timer? heartBlinkTimer;
   Timer? bpmTimeoutTimer;
   static const int ecgMaxPoints = 100;
+  
+  int _bpmCalibrationCounter = 0;
 
   // --- NOVAS VARIÁVEIS PARA NOTIFICAÇÕES ---
   String connectionMessage = "";
@@ -518,6 +526,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     if (!widget.retomando) {
       SessionManager.start(widget.atividade);
     } else {
+      _bpmCalibrationCounter = 7;
       allTemps = SessionManager.temps;
       allBpms = SessionManager.bpms; 
       lat = SessionManager.lastLat;
@@ -697,6 +706,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
             }
           } else if (topic == 'heartbox/heart/bpm') {
             int newBpm = int.tryParse(payload) ?? 0;
+            if (_bpmCalibrationCounter < 7) {
+              _bpmCalibrationCounter++;
+              return; 
+            }
             currentBpm = newBpm;
             if (newBpm > 0) {
               allBpms.add(newBpm);
@@ -1528,7 +1541,6 @@ class WifiConfigScreen extends StatefulWidget {
 class _WifiConfigScreenState extends State<WifiConfigScreen> {
   final TextEditingController _ssidController = TextEditingController();
   final TextEditingController _passController = TextEditingController();
-  late final TextEditingController _ipController;
   bool isSending = false;
   bool _obscurePassword = true;
   String statusMessage = "Preencha os dados e clique em Enviar";
@@ -1544,11 +1556,10 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   @override
   void initState() {
     super.initState();
-    _ipController = TextEditingController(text: SessionManager.serverIp);
   }
 
   Future<void> _enviarDadosBLE() async {
-    await SessionManager.setServerIp(_ipController.text);
+    await SessionManager.setServerIp("20.220.169.18");
     setState(() {
       isSending = true;
       statusMessage = "A procurar as placas (${widget.targetName})...";
@@ -1601,7 +1612,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                       await c.write(utf8.encode(_passController.text));
                     }
                     if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                      String ipEnvio = _ipController.text;
+                      String ipEnvio = "20.220.169.18";
                       if (!ipEnvio.contains(':')) ipEnvio += ":8080";
                       await c.write(utf8.encode(ipEnvio));
                     }
@@ -1712,16 +1723,6 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
             ),
             
             const SizedBox(height: 15),
-            
-            TextField(
-              controller: _ipController,
-              decoration: InputDecoration(
-                labelText: "IP do Computador", 
-                filled: true, 
-                fillColor: AppColors.surface, 
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))
-              ),
-            ),
             
             const SizedBox(height: 40),
             
