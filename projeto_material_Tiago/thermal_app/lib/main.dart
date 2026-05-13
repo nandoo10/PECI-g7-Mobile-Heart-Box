@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:ui' as ui; // NOVO: Usado para o efeito Blur e CustomPaint
+import 'dart:ui' as ui;
+// NOVO: Usado para o efeito Blur e CustomPaint
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; 
@@ -35,7 +36,7 @@ class SessionManager {
   static double lastLon = -8.2245;
   static List<LatLng> route = [];
   static double distance = 0.0;
-  static String serverIp = ""; 
+  static String serverIp = "";
 
   static Future<void> init() async {
     prefs = await SharedPreferences.getInstance();
@@ -112,7 +113,7 @@ class SessionManager {
     bpms = []; 
     route = [];
     distance = 0.0;
-    await prefs.clear(); 
+    await prefs.clear();
   }
 
   static int get elapsedSeconds {
@@ -255,11 +256,9 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
     try {
       final url = Uri.parse('http://${SessionManager.serverIp}:1880/lista-atividades');
       final response = await http.get(url).timeout(const Duration(seconds: 15));
-      
       if (response.statusCode == 200) {
         List<dynamic> data = json.decode(response.body);
         List<ActivityData> listaFinal = [];
-
         for (var item in data) {
           try {
             List<double> tempsExtraidas = [];
@@ -284,7 +283,8 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
                 if (decoded is List) {
                   routeExtraida = decoded.map((e) => LatLng((e['lat'] as num).toDouble(), (e['lon'] as num).toDouble())).toList();
                 }
-              } catch(e) { print("Erro rota: $e"); }
+              } catch(e) { print("Erro rota: $e");
+              }
             }
 
             double distExtraida = 0.0;
@@ -317,7 +317,8 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               max: double.tryParse(item['temp_maxima']?.toString() ?? "0") ?? 0.0,
               bpmReadings: bpmExtraidos,
             ));
-          } catch (e) { print("Erro ao processar item do histórico: $e"); }
+          } catch (e) { print("Erro ao processar item do histórico: $e");
+          }
         }
 
         if (mounted) setState(() => activitiesList = listaFinal);
@@ -426,6 +427,7 @@ class ActivityScreen extends StatefulWidget {
 
 class _ActivityScreenState extends State<ActivityScreen> {
   String atividade = 'Caminhada';
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -461,6 +463,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
 class MonitorScreen extends StatefulWidget {
   final String atividade;
   final bool retomando;
+
   const MonitorScreen({super.key, required this.atividade, this.retomando = false});
   @override
   State<MonitorScreen> createState() => _MonitorScreenState();
@@ -478,13 +481,12 @@ class _MonitorScreenState extends State<MonitorScreen> {
   double distance = 0.0;
   bool firstGpsLock = false;
 
-  bool hasGpsSignal = false; 
-
+  bool hasGpsSignal = false;
   bool connected = false;
   bool isPaused = false;
   late Timer timer;
   int seconds = 0;
-  bool showThermal = false; 
+  bool showThermal = false;
   bool showMap = false; 
   
   List<int>? rawThermalData;
@@ -502,6 +504,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool heartBlinkState = false;
   Timer? heartBlinkTimer;
   static const int ecgMaxPoints = 100;
+
+  // --- NOVAS VARIÁVEIS PARA NOTIFICAÇÕES ---
+  String connectionMessage = "";
+  Color connectionColor = Colors.transparent;
+  bool isRecovering = false;
+  bool fatalError = false;
+  Timer? _networkCheckTimer;
+  int _disconnectSeconds = 0;
 
   @override
   void initState() {
@@ -522,13 +532,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
       }
     }
     connectMQTT();
+    _startNetworkMonitor();
+    // ADICIONADO: Inicia a monitorização da rede
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && !isPaused) {
         setState(() { seconds = SessionManager.elapsedSeconds; });
         SessionManager.saveProgress(allTemps, allBpms, lat, lon, route, distance);
       }
     });
-
     blinkTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
       if (mounted && proximityStatus == "OBSTACULO_PERTO") {
         setState(() => blinkState = !blinkState);
@@ -541,8 +552,59 @@ class _MonitorScreenState extends State<MonitorScreen> {
     timer.cancel();
     blinkTimer?.cancel();
     heartBlinkTimer?.cancel();
+    _networkCheckTimer?.cancel();
+    // ADICIONADO: Cancela o timer da rede
     client?.disconnect();
     super.dispose();
+  }
+
+  // --- NOVA FUNÇÃO DE MONITORIZAÇÃO ---
+  void _startNetworkMonitor() {
+    _networkCheckTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      if (!mounted || fatalError) return;
+
+      final bool isConnected = client?.connectionStatus?.state == MqttConnectionState.connected;
+
+      if (!isConnected) {
+        _disconnectSeconds += 2; // Incrementa de 2 em 2 segundos
+
+        // Se passarem 120 segundos (2 minutos) sem ligar
+        if (_disconnectSeconds >= 120) {
+          setState(() {
+            fatalError = true;
+            isRecovering = false;
+            connectionMessage = "Ligação perdida há mais de 2 min. Configure via QR Code.";
+            connectionColor = Colors.red;
+          });
+          _networkCheckTimer?.cancel();
+          client?.disconnect(); 
+        } 
+        else if (!isRecovering) {
+          // Enquanto estiver dentro dos 2 minutos, mostra o aviso de recuperação
+          setState(() {
+            isRecovering = true;
+            connectionMessage = "Conexão Perdida. A tentar restabelecer...";
+            connectionColor = Colors.orange;
+          });
+        }
+      } else {
+        // Se ligar com sucesso, reiniciamos o contador de erro
+        _disconnectSeconds = 0;
+        if (isRecovering) {
+          setState(() {
+            isRecovering = false;
+            connectionMessage = "Ligação restabelecida com sucesso";
+            connectionColor = Colors.green;
+          });
+          // Limpa a mensagem verde após 3 segundos
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted && !isRecovering && !fatalError) {
+              setState(() => connectionMessage = "");
+            }
+          });
+        }
+      }
+    });
   }
 
   void _triggerHeartBlink() {
@@ -555,11 +617,13 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
   Future<void> connectMQTT() async {
     client = MqttServerClient(SessionManager.serverIp, 'flutter_${DateTime.now().millisecondsSinceEpoch}');
+    client!.autoReconnect = true;
+    // ADICIONADO: Força o cliente a tentar ligar sozinho
     try {
       await client!.connect();
       setState(() => connected = true);
       client!.subscribe('heartbox/sensor/thermal', MqttQos.atMostOnce);
-      client!.subscribe('heartbox/cam/thermal_raw', MqttQos.atMostOnce);
+      client!.subscribe('heartbox/cam/thermal_raw', MqttQos.atMostOnce); 
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
@@ -576,7 +640,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
               rawThermalData = recMess.payload.message;
             });
           }
-          return;
+          return; 
         }
 
         final String payload = String.fromCharCodes(recMess.payload.message);
@@ -610,6 +674,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 double newLat = double.tryParse(coords[0]) ?? lat;
                 double newLon = double.tryParse(coords[1]) ?? lon;
                 LatLng newPoint = LatLng(newLat, newLon);
+
                 if (!firstGpsLock) {
                   firstGpsLock = true;
                   lat = newLat; lon = newLon;
@@ -634,19 +699,28 @@ class _MonitorScreenState extends State<MonitorScreen> {
             int newBpm = int.tryParse(payload) ?? 0;
             currentBpm = newBpm;
             if (newBpm > 0) {
-              allBpms.add(newBpm); 
+              allBpms.add(newBpm);
               _triggerHeartBlink();
             }
           }
         });
       });
-    } catch (e) { print(e); }
+    } catch (e) { 
+      print(e);
+      // ADICIONADO: Se a ligação falhar de forma crítica, mostra erro.
+      if (mounted) {
+        setState(() {
+          fatalError = true;
+          connectionMessage = "Não foi possível restabelecer ligação. Leia o QR code novamente.";
+          connectionColor = Colors.red;
+        });
+      }
+    }
   }
 
   void _mostrarAlertaQueda() {
     if (isShowingFallAlert) return;
     isShowingFallAlert = true;
-
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -756,6 +830,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
         ],
       ),
     );
+
     if (salvar == true) {
       try {
         await http.post(Uri.parse('http://${SessionManager.serverIp}:1880/guardar'), 
@@ -794,39 +869,78 @@ class _MonitorScreenState extends State<MonitorScreen> {
             Padding(padding: const EdgeInsets.only(right: 15), child: Icon(Icons.circle, color: connected ? AppColors.success : AppColors.danger, size: 12))
           ],
         ),
-        body: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              children: [
-                if (showMap || showThermal)
-                  Container(height: 250, width: double.infinity, margin: const EdgeInsets.only(bottom: 15), decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)), clipBehavior: Clip.antiAlias, child: showMap ? _buildMapWidget() : _buildThermalWidget()),
-
-                _buildTempAndBpmCards(),
-
-                const SizedBox(height: 15),
-                Row(children: [
-                  _buildMiniBox("Tempo", _formatTime(seconds), Icons.timer_outlined), 
-                  const SizedBox(width: 15), 
-                  _buildProximityBox()
-                ]),
-                const SizedBox(height: 15),
-                _buildGPSStatusBox(),
-                const SizedBox(height: 20),
-
-                SizedBox(height: 250, child: _buildEcgChart()),
-
-                const SizedBox(height: 25),
-                Row(
+        // ADICIONADO: O Stack permite colocar a notificação flutuante por cima do conteúdo
+        body: Stack(
+          children: [
+            SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
                   children: [
-                    Expanded(child: SizedBox(height: 60, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: isPaused ? AppColors.success : Colors.orangeAccent), onPressed: () { setState(() { isPaused = !isPaused; if (!isPaused) SessionManager.adjustStartTimeForPause(seconds); }); }, icon: Icon(isPaused ? Icons.play_arrow : Icons.pause), label: Text(isPaused ? "RETOMAR" : "PAUSAR")))),
-                    const SizedBox(width: 15),
-                    Expanded(child: SizedBox(height: 60, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger), onPressed: finishActivity, child: const Text("CONCLUIR", style: TextStyle(fontWeight: FontWeight.bold))))),
+                    if (showMap || showThermal)
+                      Container(height: 250, width: double.infinity, margin: const EdgeInsets.only(bottom: 15), decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(25), border: Border.all(color: Colors.white10)), clipBehavior: Clip.antiAlias, child: showMap ? _buildMapWidget() : _buildThermalWidget()),
+
+                    _buildTempAndBpmCards(),
+
+                    const SizedBox(height: 15),
+                    Row(children: [
+                      _buildMiniBox("Tempo", _formatTime(seconds), Icons.timer_outlined), 
+                      const SizedBox(width: 15), 
+                      _buildProximityBox()
+                    ]),
+                    const SizedBox(height: 15),
+                    _buildGPSStatusBox(),
+                    const SizedBox(height: 20),
+
+                    SizedBox(height: 250, child: _buildEcgChart()),
+
+                    const SizedBox(height: 25),
+                    Row(
+                      children: [
+                        Expanded(child: SizedBox(height: 60, child: ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: isPaused ? AppColors.success : Colors.orangeAccent), onPressed: () { setState(() { isPaused = !isPaused; if (!isPaused) SessionManager.adjustStartTimeForPause(seconds); }); }, icon: Icon(isPaused ? Icons.play_arrow : Icons.pause), label: Text(isPaused ? "RETOMAR" : "PAUSAR")))),
+                        const SizedBox(width: 15),
+                        Expanded(child: SizedBox(height: 60, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger), onPressed: finishActivity, child: const Text("CONCLUIR", style: TextStyle(fontWeight: FontWeight.bold))))),
+                      ],
+                    ),
                   ],
                 ),
-              ],
+              ),
             ),
-          ),
+            
+            // --- OVERLAY DE NOTIFICAÇÃO ADICIONADO ---
+            if (connectionMessage.isNotEmpty)
+              Positioned(
+                top: 10,
+                left: 15,
+                right: 15,
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    padding: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(
+                      color: connectionColor.withOpacity(0.95),
+                      borderRadius: BorderRadius.circular(15),
+                      boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4))],
+                    ),
+                    child: Row(
+                      children: [
+                        if (isRecovering)
+                          const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                        if (isRecovering) const SizedBox(width: 15),
+                        Expanded(
+                          child: Text(
+                            connectionMessage,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        if (fatalError) const Icon(Icons.warning_amber_rounded, color: Colors.white),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -932,10 +1046,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
     final spots = ecgPoints.asMap().entries
         .map((e) => FlSpot(e.key.toDouble(), e.value))
         .toList();
-
     double minY = ecgPoints.reduce((a, b) => a < b ? a : b) - 100;
     double maxY = ecgPoints.reduce((a, b) => a > b ? a : b) + 100;
-
     return Container(
       decoration: BoxDecoration(
         color: Colors.black,
@@ -1028,7 +1140,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
     bool isDanger = proximityStatus == "OBSTACULO_PERTO";
     Color iconColor = isDanger ? (blinkState ? AppColors.danger : Colors.black) : AppColors.success;
     String label = isDanger ? "Perigo!" : "Livre!";
-
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(20),
@@ -1057,7 +1168,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(25),
       child: ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        imageFilter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8), 
         child: CustomPaint(
           size: const Size(double.infinity, double.infinity),
           painter: ThermalPainter(rawThermalData!),
@@ -1082,14 +1193,16 @@ class ActivityLogScreen extends StatefulWidget {
 class _ActivityLogScreenState extends State<ActivityLogScreen> {
   Set<String> selectedIds = {};
   bool isSelectionMode = false;
-
   Future<void> apagarUnica(String id) async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: const Text("Apagar Atividade?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR", style: TextStyle(color: AppColors.danger)))]));
-    if (confirmar == true) { try { await http.delete(Uri.parse('http://${SessionManager.serverIp}:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh(); } catch (e) {} }
+    if (confirmar == true) { try { await http.delete(Uri.parse('http://${SessionManager.serverIp}:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh();
+    } catch (e) {} }
   }
   Future<void> apagarMultiplas() async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: Text("Apagar ${selectedIds.length} atividades?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR TUDO"))]));
-    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://${SessionManager.serverIp}:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; }); }
+    if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://${SessionManager.serverIp}:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id}));
+    } catch (e) {} } widget.onRefresh(); setState(() { selectedIds.clear(); isSelectionMode = false; });
+    }
   }
 
   @override
@@ -1132,7 +1245,6 @@ class ActivityDetailScreen extends StatelessWidget {
     else if (totalSecs <= 1800) intervalX = 300.0;
     else if (totalSecs <= 3600) intervalX = 600.0;
     else intervalX = 1800.0;
-
     double spacing = 15.0; 
     if (totalSecs > 300) spacing = 5.0;
     if (totalSecs > 1800) spacing = 2.0;
@@ -1140,7 +1252,6 @@ class ActivityDetailScreen extends StatelessWidget {
 
     double dynamicWidth = (totalSecs * spacing);
     if (dynamicWidth < MediaQuery.of(context).size.width) dynamicWidth = MediaQuery.of(context).size.width;
-
     LatLngBounds? routeBounds;
     if (activity.route.length >= 2) routeBounds = LatLngBounds.fromPoints(activity.route);
 
@@ -1148,7 +1259,7 @@ class ActivityDetailScreen extends StatelessWidget {
     final int bpmMin = validBpms.isNotEmpty ? validBpms.reduce((a, b) => a < b ? a : b) : 0;
     final int bpmMax = validBpms.isNotEmpty ? validBpms.reduce((a, b) => a > b ? a : b) : 0;
     final double bpmAvg = validBpms.isNotEmpty ? validBpms.reduce((a, b) => a + b) / validBpms.length : 0.0;
-
+    
     return DefaultTabController(
       length: 3,
       child: Scaffold(
@@ -1332,7 +1443,8 @@ class ActivityDetailScreen extends StatelessWidget {
 }
 
 class ActivityData {
-  final String? id; final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
+  final String? id;
+  final String type; final int duration; final List<double> temperatures; final double min, avg, max; 
   final List<LatLng> route; final double distance;
   final List<int> bpmReadings;
   ActivityData({this.id, required this.type, required this.duration, required this.temperatures, required this.min, required this.avg, required this.max, this.route = const [], this.distance = 0.0, this.bpmReadings = const []});
@@ -1347,7 +1459,6 @@ class QRScannerScreen extends StatefulWidget {
 
 class _QRScannerScreenState extends State<QRScannerScreen> {
   bool isScanning = true;
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1415,19 +1526,17 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   final TextEditingController _ssidController = TextEditingController();
   final TextEditingController _passController = TextEditingController();
   late final TextEditingController _ipController;
-  
   bool isSending = false;
   bool _obscurePassword = true;
   String statusMessage = "Preencha os dados e clique em Enviar";
-
-  // UUIDs partilhados pelas duas placas (escritas de configuração)
-  final String UUID_SSID     = "ab35e54e-fde4-4f83-902a-07785de547b9";
-  final String UUID_PASS     = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
+  
+  final String UUID_SSID = "ab35e54e-fde4-4f83-902a-07785de547b9";
+  final String UUID_PASS = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
   final String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
 
-  // SERVICE UUIDs exclusivos de cada placa — usados para deteção fiável
-  final String SERVICE_UUID_S3  = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
+  final String SERVICE_UUID_S3 = "0a3b6985-dad6-4759-8852-dcb266d3a59e";
   final String SERVICE_UUID_CAM = "f4b82d49-43c2-48df-b3f5-7ba9e0231908";
+  final String SERVICE_UUID_ZERO = "7e408544-2ab3-4581-b541-1188318e8df5"; // NOVO UUID adicionado
 
   @override
   void initState() {
@@ -1435,85 +1544,125 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     _ipController = TextEditingController(text: SessionManager.serverIp);
   }
 
-Future<void> _enviarDadosBLE() async {
+  Future<void> _enviarDadosBLE() async {
     await SessionManager.setServerIp(_ipController.text);
-    
-    // Nome do QR Code limpo
-    String alvo = widget.targetName.trim().toLowerCase();
-
     setState(() {
       isSending = true;
-      statusMessage = "A procurar placa: $alvo...";
+      statusMessage = "A procurar as placas (${widget.targetName})...";
     });
-
+    
     try {
-      // CORRIGIDO: Removido o parâmetro 'androidUsesLocation' que causava erro
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
-      // Ouvir os resultados em tempo real
-      var subscription = FlutterBluePlus.onScanResults.listen((results) async {
+      int configuredCount = 0;
+      Set<String> configuredMacs = {};
+      bool isConnecting = false;
+      
+      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        if (isConnecting) return;
+
         for (ScanResult r in results) {
-          // Obtém o nome de várias formas para garantir compatibilidade
-          String name = r.device.platformName.isEmpty 
-              ? (r.advertisementData.advName.isEmpty ? "Desconhecido" : r.advertisementData.advName)
-              : r.device.platformName;
+          String devName = r.device.platformName.isNotEmpty ? r.device.platformName : (r.advertisementData.advName.isNotEmpty ? r.advertisementData.advName : "");
           
-          debugPrint("Avistada placa: ${name.toLowerCase()}"); 
+          bool isOurBoard = devName.contains(widget.targetName.trim()) || devName.contains("Heart_Box");
+          
+          for (var uuid in r.advertisementData.serviceUuids) {
+            // ADICIONADO SERVICE_UUID_ZERO à validação
+            if (uuid.str.toLowerCase() == SERVICE_UUID_S3 || uuid.str.toLowerCase() == SERVICE_UUID_CAM || uuid.str.toLowerCase() == SERVICE_UUID_ZERO) {
+              isOurBoard = true;
+            }
+          }
 
-          if (name.toLowerCase().contains(alvo)) {
-            await FlutterBluePlus.stopScan();
+          if (isOurBoard) {
+            String mac = r.device.remoteId.str;
             
-            setState(() => statusMessage = "A ligar a $name...");
+            if (configuredMacs.contains(mac)) continue;
+            
+            isConnecting = true;
+            configuredMacs.add(mac);
+
+            setState(() => statusMessage = "Placa encontrada. A configurar ($mac)...");
             
             try {
-              await r.device.connect(timeout: const Duration(seconds: 10), autoConnect: false);
-              await Future.delayed(const Duration(milliseconds: 500));
+              await r.device.connect(timeout: const Duration(seconds: 5));
               
               List<BluetoothService> services = await r.device.discoverServices();
-              
-              for (var s in services) {
-                for (var c in s.characteristics) {
-                  String cUuid = c.uuid.str.toLowerCase();
-                  if (cUuid == UUID_SSID.toLowerCase()) {
-                    await c.write(utf8.encode(_ssidController.text));
-                  } else if (cUuid == UUID_PASS.toLowerCase()) {
-                    await c.write(utf8.encode(_passController.text));
-                  } else if (cUuid == UUID_SERVERIP.toLowerCase()) {
-                    await c.write(utf8.encode(_ipController.text));
+              for (var service in services) {
+                // ADICIONADO SERVICE_UUID_ZERO à validação
+                if (service.uuid.str.toLowerCase() == SERVICE_UUID_S3 || service.uuid.str.toLowerCase() == SERVICE_UUID_CAM || service.uuid.str.toLowerCase() == SERVICE_UUID_ZERO) {
+                  for (var c in service.characteristics) {
+                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
+                      await c.write(utf8.encode(_ssidController.text));
+                    }
+                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
+                      await c.write(utf8.encode(_passController.text));
+                    }
+                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
+                      String ipEnvio = _ipController.text;
+                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
+                      await c.write(utf8.encode(ipEnvio));
+                    }
                   }
                 }
               }
-              
+
               await r.device.disconnect();
+              configuredCount++;
               
               if (mounted) {
-                setState(() {
-                  isSending = false;
-                  statusMessage = "✅ $name configurada!";
-                });
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$name configurada!"), backgroundColor: AppColors.success));
-                Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+                // MUDOU PARA 3 PLACAS
+                setState(() => statusMessage = "✅ Configurado: $configuredCount/3 placas");
+              }
+
+              // MUDOU PARA 3 PLACAS
+              if (configuredCount >= 3) {
+                FlutterBluePlus.stopScan();
+                if (mounted) {
+                  setState(() {
+                    statusMessage = "✅ Sucesso! As três placas foram configuradas.";
+                    isSending = false;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Todas as três placas configuradas!"), backgroundColor: AppColors.success)
+                  );
+                  Future.delayed(const Duration(seconds: 2), () => Navigator.pop(context));
+                }
+              } else {
+                await Future.delayed(const Duration(seconds: 2));
               }
             } catch (e) {
-              debugPrint("Erro na conexão: $e");
-              FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+              configuredMacs.remove(mac);
             }
+            
+            isConnecting = false;
+            break;
           }
         }
       });
 
       await Future.delayed(const Duration(seconds: 15));
-      if (isSending) {
-        await FlutterBluePlus.stopScan();
-        setState(() {
-          isSending = false;
-          statusMessage = "❌ Placa não encontrada.\nVerifica se a placa está em modo de configuração.";
-        });
+      // MUDOU PARA 3 PLACAS
+      if (configuredCount < 3) {
+        FlutterBluePlus.stopScan();
+        if (mounted) {
+          setState(() {
+            isSending = false;
+            if (configuredCount == 0) {
+              statusMessage = "❌ Placas não encontradas.\n(Se já estiverem no Wi-Fi, pode fechar este ecrã)";
+            } else {
+              statusMessage = "⚠️ Apenas $configuredCount/3 placas foram configuradas. As outras já devem estar conectadas.";
+            }
+          });
+        }
       }
       subscription.cancel();
-
     } catch (e) {
-      setState(() { isSending = false; statusMessage = "Erro: $e"; });
+      if (mounted) {
+        setState(() {
+          isSending = false;
+          statusMessage = "❌ Falha na comunicação Bluetooth.";
+        });
+      }
     }
   }
 
@@ -1594,13 +1743,7 @@ Future<void> _enviarDadosBLE() async {
               child: Text(
                 statusMessage, 
                 textAlign: TextAlign.center, 
-                style: TextStyle(
-                  color: statusMessage.contains("❌") 
-                      ? AppColors.danger 
-                      : statusMessage.contains("✅") 
-                          ? AppColors.success 
-                          : Colors.white70,
-                )
+                style: TextStyle(color: statusMessage.contains("❌") ? AppColors.danger : Colors.white70)
               )
             ),
           ],
@@ -1610,7 +1753,7 @@ Future<void> _enviarDadosBLE() async {
   }
 }
 
-// Converte a matriz de 3072 bytes (768 floats Little Endian) numa imagem desenhada no ecrã
+// NOVO: Classe que converte a matriz de 3072 bytes (float) numa imagem desenhada no ecrã
 class ThermalPainter extends CustomPainter {
   final List<int> rawBytes;
   ThermalPainter(this.rawBytes);
@@ -1620,7 +1763,6 @@ class ThermalPainter extends CustomPainter {
     final byteData = ByteData.sublistView(Uint8List.fromList(rawBytes));
     List<double> temps = List.filled(768, 0);
     double minT = 1000, maxT = -1000;
-    
     // Ler os 768 floats em Little Endian
     for(int i = 0; i < 768; i++) {
       double t = byteData.getFloat32(i * 4, Endian.little);
@@ -1639,15 +1781,14 @@ class ThermalPainter extends CustomPainter {
       }
     }
     double avg = count > 0 ? sum / count : 25.0;
-
     double cellW = size.width / 32;
     double cellH = size.height / 24;
-    
     // Desenhar a grelha píxel a píxel
     for(int y = 0; y < 24; y++) {
        for(int x = 0; x < 32; x++) {
           double t = temps[y * 32 + x];
-          if (t < 15 || t > 60) t = avg; // Limpeza de píxeis mortos
+          if (t < 15 || t > 60) t = avg;
+          // Limpeza de píxeis mortos
           
           double normalized = maxT > minT ? (t - minT) / (maxT - minT) : 0;
           if(normalized < 0) normalized = 0;
