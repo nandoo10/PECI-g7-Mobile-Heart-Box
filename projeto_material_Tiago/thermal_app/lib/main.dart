@@ -28,7 +28,7 @@ Future<void> main() async {
 class SessionManager {
   static late SharedPreferences prefs;
   static bool hasActiveSession = false;
-  static String activityType = "Caminhada";
+  static String activityType = "Bicicleta";
   static DateTime? startTime; 
   static List<double> temps = [];
   static List<int> bpms = []; 
@@ -42,7 +42,7 @@ class SessionManager {
     prefs = await SharedPreferences.getInstance();
     serverIp = prefs.getString('serverIp') ?? "";
     hasActiveSession = prefs.getBool('hasActiveSession') ?? false;
-    activityType = prefs.getString('activityType') ?? "Caminhada";
+    activityType = prefs.getString('activityType') ?? "Bicicleta";
     String? st = prefs.getString('startTime');
     if (st != null) startTime = DateTime.parse(st);
     
@@ -426,7 +426,7 @@ class ActivityScreen extends StatefulWidget {
 }
 
 class _ActivityScreenState extends State<ActivityScreen> {
-  String atividade = 'Caminhada';
+  String atividade = 'Bicicleta';
 
   @override
   Widget build(BuildContext context) {
@@ -436,8 +436,6 @@ class _ActivityScreenState extends State<ActivityScreen> {
         padding: const EdgeInsets.all(30),
         child: Column(
           children: [
-            _profileTile('Caminhada', Icons.directions_walk_rounded),
-            const SizedBox(height: 15),
             _profileTile('Bicicleta', Icons.directions_bike_rounded),
             const Spacer(),
             SizedBox(width: double.infinity, height: 65, child: ElevatedButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MonitorScreen(atividade: atividade))), child: const Text("INICIAR", style: TextStyle(fontWeight: FontWeight.bold)))),
@@ -503,6 +501,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   int currentBpm = 0;
   bool heartBlinkState = false;
   Timer? heartBlinkTimer;
+  Timer? bpmTimeoutTimer;
   static const int ecgMaxPoints = 100;
 
   // --- NOVAS VARIÁVEIS PARA NOTIFICAÇÕES ---
@@ -552,6 +551,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     timer.cancel();
     blinkTimer?.cancel();
     heartBlinkTimer?.cancel();
+    bpmTimeoutTimer?.cancel();
     _networkCheckTimer?.cancel();
     // ADICIONADO: Cancela o timer da rede
     client?.disconnect();
@@ -702,6 +702,15 @@ class _MonitorScreenState extends State<MonitorScreen> {
               allBpms.add(newBpm);
               _triggerHeartBlink();
             }
+
+            bpmTimeoutTimer?.cancel();
+            bpmTimeoutTimer = Timer(const Duration(seconds: 3), () {
+              if (mounted) {
+                setState(() {
+                  currentBpm = 0;
+                });
+              }
+            });
           }
         });
       });
@@ -1000,9 +1009,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
                     const SizedBox(width: 8),
                     currentBpm == 0
                         ? const Text(
-                            "Sem\nbatimentos",
+                            "Não estão a\nser detetados\nbpms",
                             style: TextStyle(
-                              fontSize: 15,
+                              fontSize: 12,
                               fontWeight: FontWeight.bold,
                               color: Colors.white38,
                               height: 1.2,
@@ -1193,11 +1202,6 @@ class ActivityLogScreen extends StatefulWidget {
 class _ActivityLogScreenState extends State<ActivityLogScreen> {
   Set<String> selectedIds = {};
   bool isSelectionMode = false;
-  Future<void> apagarUnica(String id) async {
-    bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: const Text("Apagar Atividade?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR", style: TextStyle(color: AppColors.danger)))]));
-    if (confirmar == true) { try { await http.delete(Uri.parse('http://${SessionManager.serverIp}:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id})); widget.onRefresh();
-    } catch (e) {} }
-  }
   Future<void> apagarMultiplas() async {
     bool? confirmar = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(backgroundColor: AppColors.surface, title: Text("Apagar ${selectedIds.length} atividades?"), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("CANCELAR")), ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("APAGAR TUDO"))]));
     if (confirmar == true) { for (var id in selectedIds) { try { await http.delete(Uri.parse('http://${SessionManager.serverIp}:1880/apagar'), headers: {"Content-Type": "application/json"}, body: json.encode({"time": id}));
@@ -1220,7 +1224,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
               leading: isSelectionMode ? Checkbox(value: isSelected, onChanged: (_) => setState(() => isSelected ? selectedIds.remove(act.id) : selectedIds.add(act.id!))) : const Icon(Icons.history),
               title: Text(act.type, style: const TextStyle(fontWeight: FontWeight.bold)),
               subtitle: Text("Dist: ${act.distance.toStringAsFixed(0)}m | Média: ${act.avg.toStringAsFixed(1)}°C"),
-              trailing: !isSelectionMode ? IconButton(icon: const Icon(Icons.delete_outline, color: AppColors.danger), onPressed: () => apagarUnica(act.id!)) : null,
               onLongPress: () => setState(() { isSelectionMode = true; selectedIds.add(act.id!); }),
               onTap: () => isSelectionMode ? setState(() => isSelected ? selectedIds.remove(act.id) : selectedIds.add(act.id!)) : Navigator.push(context, MaterialPageRoute(builder: (_) => ActivityDetailScreen(activity: act))),
             ),
@@ -1370,6 +1373,13 @@ class ActivityDetailScreen extends StatelessWidget {
                       children: [
                         const SizedBox(height: 20),
                         _bpmStatCard(
+                          label: "BPM MÁXIMO",
+                          value: "$bpmMax bpm",
+                          icon: Icons.arrow_upward_rounded,
+                          color: AppColors.danger,
+                        ),
+                        const SizedBox(height: 20),
+                        _bpmStatCard(
                           label: "BPM MÍNIMO",
                           value: "$bpmMin bpm",
                           icon: Icons.arrow_downward_rounded,
@@ -1377,17 +1387,10 @@ class ActivityDetailScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 20),
                         _bpmStatCard(
-                          label: "BPM MÉDIO",
+                          label: "MÉDIA DOS BPMS",
                           value: "${bpmAvg.toStringAsFixed(1)} bpm",
                           icon: Icons.show_chart_rounded,
                           color: AppColors.secondary,
-                        ),
-                        const SizedBox(height: 20),
-                        _bpmStatCard(
-                          label: "BPM MÁXIMO",
-                          value: "$bpmMax bpm",
-                          icon: Icons.arrow_upward_rounded,
-                          color: AppColors.danger,
                         ),
                       ],
                     ),
