@@ -337,15 +337,8 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
         title: const Text("Atividade Pendente"),
         content: const Text("Deseja continuar ou começar uma nova?"),
         actions: [
-          TextButton(
-            onPressed: () { 
-              SessionManager.clear(); 
-              Navigator.pop(ctx); 
-              // ALTERADO: Vai direto para o MonitorScreen com "Bicicleta"
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const MonitorScreen(atividade: 'Bicicleta'))); 
-            }, 
-            child: const Text("NOVA", style: TextStyle(color: AppColors.danger))
-          ),
+          TextButton(onPressed: () { SessionManager.clear(); Navigator.pop(ctx); Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityScreen())); }, child: const Text("NOVA", style: TextStyle(color: AppColors.danger))),
+          ElevatedButton(onPressed: () { Navigator.pop(ctx); Navigator.push(context, MaterialPageRoute(builder: (_) => MonitorScreen(atividade: SessionManager.activityType, retomando: true))); }, child: const Text("CONTINUAR")),
         ],
       ),
     );
@@ -377,7 +370,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
                 if (SessionManager.hasActiveSession) {
                   _mostrarDialogoRetomar();
                 } else {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const MonitorScreen(atividade: 'Bicicleta')));
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityScreen()));
                 }
               },
               child: Container(
@@ -387,7 +380,7 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
               ),
             ),
             const SizedBox(height: 20),
-            const Text("INICIAR ATIVIDADE BICICLETA", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+            const Text("INICIAR MONITORIZAÇÃO", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2)),
           ],
         ),
       ),
