@@ -2399,126 +2399,148 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
       statusMessage = "A procurar as placas (${widget.targetName})...";
     });
 
-    try {
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 45));
+    // MACs já a ser processados (substitui o booleano isConnecting global)
+    final Set<String> processingMacs = {};
+    final Set<String> configuredMacs = {};
+    int configuredCount = 0;
 
-      int configuredCount = 0;
-      Set<String> configuredMacs = {};
-      bool isConnecting = false;
+    // UUIDs dos três serviços (um por placa)
+    const List<String> knownServiceUuids = [
+      "f4b82d49-43c2-48df-b3f5-7ba9e0231908", // CAM
+      "0a3b6985-dad6-4759-8852-dcb266d3a59e", // S3
+      "7e408544-2ab3-4581-b541-1188318e8df5", // ZERO
+    ];
 
-      var subscription =
-          FlutterBluePlus.scanResults.listen((results) async {
-        if (isConnecting) return;
+    const String UUID_SSID     = "ab35e54e-fde4-4f83-902a-07785de547b9";
+    const String UUID_PASS     = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
+    const String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
 
-        for (ScanResult r in results) {
-          String devName = r.device.platformName.isNotEmpty
-              ? r.device.platformName
-              : (r.advertisementData.advName.isNotEmpty
-                  ? r.advertisementData.advName
-                  : "");
+    // Configura uma placa com retry (até 3 tentativas)
+    Future<bool> _configurarPlaca(ScanResult r) async {
+      const int maxRetries = 3;
+      for (int attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          if (mounted) {
+            setState(() => statusMessage =
+                "A configurar ${r.device.platformName} "
+                "(tentativa $attempt/$maxRetries)...");
+          }
 
-          bool isOurBoard = devName.contains(widget.targetName.trim()) ||
-              devName.contains("Heart_Box");
+          await r.device.connect(timeout: const Duration(seconds: 15));
+          final services = await r.device.discoverServices();
 
-          for (var uuid in r.advertisementData.serviceUuids) {
-            if (uuid.str.toLowerCase() == SERVICE_UUID_S3 ||
-                uuid.str.toLowerCase() == SERVICE_UUID_CAM ||
-                uuid.str.toLowerCase() == SERVICE_UUID_ZERO) {
-              isOurBoard = true;
+          for (final service in services) {
+            final suuid = service.uuid.str.toLowerCase();
+            if (!knownServiceUuids.contains(suuid)) continue;
+
+            for (final c in service.characteristics) {
+              final cuuid = c.uuid.str.toLowerCase();
+              if (cuuid == UUID_SSID) {
+                await c.write(utf8.encode(_ssidController.text));
+                await Future.delayed(const Duration(milliseconds: 300));
+              } else if (cuuid == UUID_PASS) {
+                await c.write(utf8.encode(_passController.text));
+                await Future.delayed(const Duration(milliseconds: 300));
+              } else if (cuuid == UUID_SERVERIP) {
+                await c.write(utf8.encode("20.220.169.18:8080"));
+                await Future.delayed(const Duration(milliseconds: 500));
+              }
             }
           }
 
-          if (isOurBoard) {
-            String mac = r.device.remoteId.str;
-            if (configuredMacs.contains(mac)) continue;
+          await r.device.disconnect();
+          return true; // sucesso
+        } catch (e) {
+          try { await r.device.disconnect(); } catch (_) {}
+          if (attempt < maxRetries) {
+            await Future.delayed(Duration(seconds: attempt * 2));
+          }
+        }
+      }
+      return false; // todas as tentativas falharam
+    }
 
-            isConnecting = true;
-            configuredMacs.add(mac);
-            setState(
-                () => statusMessage = "Placa encontrada. A configurar ($mac)...");
+    try {
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 90));
 
-            try {
-              await r.device
-                  .connect(timeout: const Duration(seconds: 10));
-              List<BluetoothService> services =
-                  await r.device.discoverServices();
+      final subscription = FlutterBluePlus.scanResults.listen((results) {
+        for (final r in results) {
+          final mac = r.device.remoteId.str;
 
-              for (var service in services) {
-                if (service.uuid.str.toLowerCase() == SERVICE_UUID_S3 ||
-                    service.uuid.str.toLowerCase() == SERVICE_UUID_CAM ||
-                    service.uuid.str.toLowerCase() == SERVICE_UUID_ZERO) {
-                  for (var c in service.characteristics) {
-                    if (c.uuid.str.toLowerCase() == UUID_SSID) {
-                      await c.write(utf8.encode(_ssidController.text));
-                      await Future.delayed(
-                          const Duration(milliseconds: 300));
-                    }
-                    if (c.uuid.str.toLowerCase() == UUID_PASS) {
-                      await c.write(utf8.encode(_passController.text));
-                      await Future.delayed(
-                          const Duration(milliseconds: 300));
-                    }
-                    if (c.uuid.str.toLowerCase() == UUID_SERVERIP) {
-                      String ipEnvio = "20.220.169.18";
-                      if (!ipEnvio.contains(':')) ipEnvio += ":8080";
-                      await c.write(utf8.encode(ipEnvio));
-                      await Future.delayed(
-                          const Duration(milliseconds: 500));
-                    }
-                  }
-                }
-              }
+          // Ignora se já foi configurada ou está em processo
+          if (configuredMacs.contains(mac)) continue;
+          if (processingMacs.contains(mac)) continue;
 
-              await r.device.disconnect();
+          // Verifica se é uma das nossas placas
+          final devName = r.device.platformName.isNotEmpty
+              ? r.device.platformName
+              : r.advertisementData.advName;
+
+          final advertisedUuids = r.advertisementData.serviceUuids
+              .map((u) => u.str.toLowerCase())
+              .toList();
+
+          final bool isOurBoard =
+              devName.contains(widget.targetName.trim()) ||
+              devName.contains("Heart_Box") ||
+              advertisedUuids.any((u) => knownServiceUuids.contains(u));
+
+          if (!isOurBoard) continue;
+
+          // Marca como em processo e lança tarefa paralela
+          processingMacs.add(mac);
+
+          _configurarPlaca(r).then((success) {
+            if (!mounted) return;
+            if (success) {
+              configuredMacs.add(mac);
               configuredCount++;
-              if (mounted) {
-                setState(() =>
-                    statusMessage = "✅ Configurado: $configuredCount/3 placas");
-              }
+              setState(() =>
+                  statusMessage = "✅ Configuradas: $configuredCount/3 placas");
 
               if (configuredCount >= 3) {
                 FlutterBluePlus.stopScan();
-                if (mounted) {
-                  setState(() {
-                    statusMessage =
-                        "✅ Sucesso! As três placas foram configuradas.";
-                    isSending = false;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text("Todas as três placas configuradas!"),
-                      backgroundColor: AppColors.success));
-                  Future.delayed(const Duration(seconds: 2),
-                      () => Navigator.pop(context));
-                }
+                setState(() {
+                  isSending = false;
+                  statusMessage = "✅ Sucesso! As três placas foram configuradas.";
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text("Todas as três placas configuradas!"),
+                    backgroundColor: AppColors.success,
+                  ),
+                );
+                Future.delayed(const Duration(seconds: 2),
+                    () => Navigator.pop(context));
               }
-            } catch (e) {
-              configuredMacs.remove(mac);
-            }
-
-            isConnecting = false;
-            break;
-          }
-        }
-      });
-
-      await Future.delayed(const Duration(seconds: 45));
-
-      if (configuredCount < 3) {
-        FlutterBluePlus.stopScan();
-        if (mounted) {
-          setState(() {
-            isSending = false;
-            if (configuredCount == 0) {
-              statusMessage =
-                  "❌ Placas não encontradas.\n(Se já estiverem no Wi-Fi, pode fechar este ecrã)";
             } else {
-              statusMessage =
-                  "⚠️ Apenas $configuredCount/3 placas foram configuradas.";
+              // Falhou — retira do set para permitir nova tentativa no scan
+              processingMacs.remove(mac);
+              if (mounted) {
+                setState(() => statusMessage =
+                    "⚠️ Falhou ao configurar $devName. A tentar novamente...");
+              }
             }
           });
         }
-      }
+      });
+
+      // Aguarda o fim do scan (90s)
+      await Future.delayed(const Duration(seconds: 90));
+
+      FlutterBluePlus.stopScan();
       subscription.cancel();
+
+      if (mounted && configuredCount < 3) {
+        setState(() {
+          isSending = false;
+          statusMessage = configuredCount == 0
+              ? "❌ Placas não encontradas.\n"
+                "(Se já estiverem no Wi-Fi, pode fechar este ecrã)"
+              : "⚠️ Apenas $configuredCount/3 placas foram configuradas.\n"
+                "Tente novamente o scan.";
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
