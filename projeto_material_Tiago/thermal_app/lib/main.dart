@@ -903,12 +903,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool blinkState = true;
   Timer? blinkTimer;
 
-  List<double> ecgPoints = [];
+  List<FlSpot> liveBpmSpots = [];
   int currentBpm = 0;
   bool heartBlinkState = false;
   Timer? heartBlinkTimer;
   Timer? bpmTimeoutTimer;
-  static const int ecgMaxPoints = 100;
 
   int _bpmCalibrationCounter = 0;
 
@@ -1030,7 +1029,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
       client!.subscribe('heartbox/gps/coords', MqttQos.atMostOnce);
       client!.subscribe('heartbox/alerts/fall', MqttQos.atMostOnce);
       client!.subscribe('heartbox/sensor/proximity', MqttQos.atMostOnce);
-      client!.subscribe('heartbox/heart/ecg', MqttQos.atMostOnce);
       client!.subscribe('heartbox/heart/bpm', MqttQos.atMostOnce);
 
       client!.updates?.listen((c) {
@@ -1101,27 +1099,55 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 hasGpsSignal = false;
               }
             }
-          } else if (topic == 'heartbox/heart/ecg') {
-            double val = double.tryParse(payload) ?? 0.0;
-            ecgPoints.add(val);
-            if (ecgPoints.length > ecgMaxPoints) {
-              ecgPoints.removeAt(0);
-            }
           } else if (topic == 'heartbox/heart/bpm') {
-            int newBpm = int.tryParse(payload) ?? 0;
-            if (_bpmCalibrationCounter < 7) {
-              _bpmCalibrationCounter++;
+            // Se vier o sinal de elétrodos soltos (!) ou falha
+            if (payload == "!") {
+              setState(() {
+                currentBpm = 0;
+                _bpmCalibrationCounter = 0; // Reinicia a calibração
+              });
+              bpmTimeoutTimer?.cancel();
               return;
             }
-            currentBpm = newBpm;
+
+            int newBpm = int.tryParse(payload) ?? 0;
             if (newBpm > 0) {
-              allBpms.add(newBpm);
+              // IGNORAR OS 3 PRIMEIROS VALORES
+              if (_bpmCalibrationCounter < 3) {
+                setState(() {
+                  _bpmCalibrationCounter++;
+                  currentBpm = 0; // Mantém 0 para a UI mostrar "A calcular bpm"
+                });
+                return;
+              }
+
+              // A PARTIR DO 4º VALOR: GUARDAR E MOSTRAR
+              setState(() {
+                currentBpm = newBpm;
+                allBpms.add(newBpm);
+                
+                // Adiciona o ponto ao gráfico contínuo com o tempo atual
+                liveBpmSpots.add(FlSpot(seconds.toDouble(), newBpm.toDouble()));
+                
+                // Mantém apenas os últimos 60 pontos (aprox. 5 min se enviar de 5 em 5s) para não pesar na RAM
+                if (liveBpmSpots.length > 60) {
+                  liveBpmSpots.removeAt(0);
+                }
+              });
+              
               _triggerHeartBlink();
+
+              // TIMEOUT DE 10 SEGUNDOS
+              bpmTimeoutTimer?.cancel();
+              bpmTimeoutTimer = Timer(const Duration(seconds: 10), () {
+                if (mounted) {
+                  setState(() {
+                    currentBpm = 0;
+                    _bpmCalibrationCounter = 0; // Exige nova calibração se perder sinal muito tempo
+                  });
+                }
+              });
             }
-            bpmTimeoutTimer?.cancel();
-            bpmTimeoutTimer = Timer(const Duration(seconds: 3), () {
-              if (mounted) setState(() => currentBpm = 0);
-            });
           }
         });
       });
@@ -1395,7 +1421,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                     const SizedBox(height: 15),
                     _buildGPSStatusBox(),
                     const SizedBox(height: 20),
-                    SizedBox(height: 250, child: _buildEcgChart()),
+                    SizedBox(height: 250, child: _buildBpmChart()),
                     const SizedBox(height: 25),
                     Row(
                       children: [
@@ -1542,34 +1568,40 @@ class _MonitorScreenState extends State<MonitorScreen> {
                         fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      child: Icon(Icons.favorite,
-                          color: heartBlinkState
-                              ? AppColors.danger
-                              : AppColors.danger.withOpacity(0.3),
-                          size: heartBlinkState ? 28 : 22),
-                    ),
-                    const SizedBox(width: 8),
-                    currentBpm == 0
-                        ? const Text(
-                            "Não estão a\nser detetados\nbpms",
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        child: Icon(Icons.favorite,
+                            color: heartBlinkState
+                                ? AppColors.danger
+                                : AppColors.danger.withOpacity(0.3),
+                            size: heartBlinkState ? 28 : 22),
+                      ),
+                      const SizedBox(width: 8),
+                      // LÓGICA DE TEXTO DINÂMICO
+                      if (currentBpm > 0)
+                        Text("$currentBpm bpm",
+                            style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                                color: isPaused ? Colors.white24 : AppColors.danger))
+                      else if (_bpmCalibrationCounter > 0 && _bpmCalibrationCounter < 3)
+                        const Text("A calcular\nbpm...",
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.success,
+                                height: 1.2))
+                      else
+                        const Text("Sem batimentos\ndetetados",
                             style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white38,
-                                height: 1.2))
-                        : Text("$currentBpm bpm",
-                            style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w900,
-                                color: isPaused
-                                    ? Colors.white24
-                                    : AppColors.danger)),
-                  ],
-                ),
+                                height: 1.2)),
+                    ],
+                  ),
               ],
             ),
           ),
@@ -1578,20 +1610,18 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  Widget _buildEcgChart() {
-    if (ecgPoints.isEmpty) {
+  Widget _buildBpmChart() {
+    if (liveBpmSpots.isEmpty) {
       return Container(
         decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(25)),
+            color: AppColors.surface, borderRadius: BorderRadius.circular(25)),
         child: const Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.monitor_heart_outlined,
-                  color: Colors.white24, size: 40),
+              Icon(Icons.show_chart_rounded, color: Colors.white24, size: 40),
               SizedBox(height: 8),
-              Text("A aguardar sinal ECG...",
+              Text("A aguardar dados de BPM...",
                   style: TextStyle(color: Colors.white24)),
             ],
           ),
@@ -1599,11 +1629,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
       );
     }
 
-    final spots = ecgPoints.asMap().entries
-        .map((e) => FlSpot(e.key.toDouble(), e.value))
-        .toList();
-    double minY = ecgPoints.reduce((a, b) => a < b ? a : b) - 100;
-    double maxY = ecgPoints.reduce((a, b) => a > b ? a : b) + 100;
+    // Lógica do Eixo X dinâmico: Começa em 0 e vai deslizando os últimos 60 segundos
+    double maxX = seconds.toDouble();
+    double minX = maxX > 60 ? maxX - 60 : 0;
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.black,
@@ -1616,7 +1645,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
         children: [
           const Padding(
             padding: EdgeInsets.only(left: 8, bottom: 4),
-            child: Text("ECG  ──────────────────────",
+            child: Text("BPM EM TEMPO REAL  ─────────────────",
                 style: TextStyle(
                     color: AppColors.danger,
                     fontSize: 10,
@@ -1626,40 +1655,56 @@ class _MonitorScreenState extends State<MonitorScreen> {
           Expanded(
             child: LineChart(
               LineChartData(
-                minY: minY,
-                maxY: maxY,
+                minY: 50, // Delimitado a 50
+                maxY: 200, // Delimitado a 200
+                minX: minX,
+                maxX: maxX,
                 clipData: const FlClipData.all(),
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: true,
-                  horizontalInterval: (maxY - minY) / 4,
-                  verticalInterval: ecgMaxPoints / 5,
+                  horizontalInterval: 30,
+                  verticalInterval: 10,
                   getDrawingHorizontalLine: (_) =>
                       const FlLine(color: Color(0xFF1A2A1A), strokeWidth: 1),
                   getDrawingVerticalLine: (_) =>
                       const FlLine(color: Color(0xFF1A2A1A), strokeWidth: 1),
                 ),
                 titlesData: const FlTitlesData(
-                  leftTitles:
-                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles:
-                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  topTitles:
-                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  bottomTitles:
-                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 ),
                 borderData: FlBorderData(show: false),
                 lineBarsData: [
                   LineChartBarData(
-                    spots: spots,
-                    isCurved: false,
+                    spots: liveBpmSpots,
+                    isCurved: true,
+                    curveSmoothness: 0.35,
                     color: AppColors.danger,
-                    barWidth: 1.5,
-                    dotData: const FlDotData(show: false),
+                    barWidth: 3,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) =>
+                          FlDotCirclePainter(
+                              radius: 3,
+                              color: AppColors.danger,
+                              strokeWidth: 1.5,
+                              strokeColor: Colors.white),
+                    ),
                     belowBarData: BarAreaData(
-                        show: true,
-                        color: AppColors.danger.withOpacity(0.05)),
+                      show: true,
+                      gradient: LinearGradient(
+                        colors: [
+                          AppColors.danger.withOpacity(0.4),
+                          AppColors.danger.withOpacity(0.0),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
                   ),
                 ],
               ),
