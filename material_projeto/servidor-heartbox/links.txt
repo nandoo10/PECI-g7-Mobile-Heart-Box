@@ -1,4 +1,0 @@
-
-Node-red: http://localhost:1880
-Grafana: http://localhost:3000
-lista-atividades (histórico): http://172.20.10.6:1880/lista-atividades
