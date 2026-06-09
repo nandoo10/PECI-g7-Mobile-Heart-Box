@@ -1,0 +1,329 @@
+[
+    {
+        "id": "f6f2187d.f17ca8",
+        "type": "tab",
+        "label": "Flow 1",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "3cc11d24.ff01a2",
+        "type": "comment",
+        "z": "f6f2187d.f17ca8",
+        "name": "WARNING: please check you have started this container with a volume that is mounted to /data\\n otherwise any flow changes are lost when you redeploy or upgrade the container\\n (e.g. upgrade to a more recent node-red docker image).\\n  If you are using named volumes you can ignore this warning.\\n Double click or see info side panel to learn how to start Node-RED in Docker to save your work",
+        "info": "\nTo start docker with a bind mount volume (-v option), for example:\n\n```\ndocker run -it -p 1880:1880 -v /home/user/node_red_data:/data --name mynodered nodered/node-red\n```\n\nwhere `/home/user/node_red_data` is a directory on your host machine where you want to store your flows.\n\nIf you do not do this then you can experiment and redploy flows, but if you restart or upgrade the container the flows will be disconnected and lost. \n\nThey will still exist in a hidden data volume, which can be recovered using standard docker techniques, but that is much more complex than just starting with a named volume as described above.",
+        "x": 350,
+        "y": 80,
+        "wires": []
+    },
+    {
+        "id": "213e6e51942851e2",
+        "type": "mqtt in",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "topic": "heartbox/sensor/thermal",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "c7f1a8cac0c9713e",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 230,
+        "y": 220,
+        "wires": [
+            [
+                "49c9a42fd2c70664"
+            ]
+        ]
+    },
+    {
+        "id": "49c9a42fd2c70664",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "function 1",
+        "func": "msg.payload = {\n    temperatura: Number(msg.payload)\n};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 520,
+        "y": 220,
+        "wires": [
+            [
+                "b86abe679008af8b"
+            ]
+        ]
+    },
+    {
+        "id": "b86abe679008af8b",
+        "type": "influxdb out",
+        "z": "f6f2187d.f17ca8",
+        "influxdb": "4fb16e62804e8101",
+        "name": "",
+        "measurement": "temperatura",
+        "precision": "",
+        "retentionPolicy": "",
+        "database": "database",
+        "precisionV18FluxV20": "ms",
+        "retentionPolicyV18Flux": "",
+        "org": "organisation",
+        "bucket": "bucket",
+        "x": 930,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "1c01ee982423e6cc",
+        "type": "http in",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "url": "/historico",
+        "method": "get",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 300,
+        "wires": [
+            [
+                "695e320a4162beca"
+            ]
+        ]
+    },
+    {
+        "id": "695e320a4162beca",
+        "type": "influxdb in",
+        "z": "f6f2187d.f17ca8",
+        "influxdb": "4fb16e62804e8101",
+        "name": "",
+        "query": "SELECT * FROM heartbox",
+        "rawOutput": false,
+        "precision": "",
+        "retentionPolicy": "",
+        "org": "organisation",
+        "x": 590,
+        "y": 300,
+        "wires": [
+            [
+                "3a29629187f4e177"
+            ]
+        ]
+    },
+    {
+        "id": "3a29629187f4e177",
+        "type": "http response",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 850,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "641b310ad4b57067",
+        "type": "http in",
+        "z": "f6f2187d.f17ca8",
+        "name": "Receber Treino",
+        "url": "/guardar",
+        "method": "post",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 220,
+        "y": 380,
+        "wires": [
+            [
+                "a53c30059832fb30",
+                "4768f71c49e8f447"
+            ]
+        ]
+    },
+    {
+        "id": "a53c30059832fb30",
+        "type": "json",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "property": "payload",
+        "action": "",
+        "pretty": false,
+        "x": 430,
+        "y": 380,
+        "wires": [
+            [
+                "fe0e0ab23e60ba33",
+                "3c7addbcbca545c3"
+            ]
+        ]
+    },
+    {
+        "id": "4768f71c49e8f447",
+        "type": "debug",
+        "z": "f6f2187d.f17ca8",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 100,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "fe0e0ab23e60ba33",
+        "type": "function",
+        "z": "f6f2187d.f17ca8",
+        "name": "function 2",
+        "func": "var req = msg.payload;\n\nif (typeof req === \"string\") {\n    req = JSON.parse(req);\n}\n\n// Cálculo da Temperatura\nvar minTemp = 0, maxTemp = 0, avgTemp = 0;\nvar temps = req.temperatures || [];\nif (temps.length > 0) {\n    minTemp = Math.min.apply(null, temps);\n    maxTemp = Math.max.apply(null, temps);\n    avgTemp = temps.reduce((a, b) => a + b, 0) / temps.length;\n}\n\n// Cálculo dos BPM\nvar minBpm = 0, maxBpm = 0, avgBpm = 0;\nvar bpms = req.bpm_history || []; // O nome que vem do Flutter\nif (bpms.length > 0) {\n    minBpm = Math.min.apply(null, bpms);\n    maxBpm = Math.max.apply(null, bpms);\n    avgBpm = bpms.reduce((a, b) => a + b, 0) / bpms.length;\n}\n\nvar nomeAtividade = req.type || \"Atividade\";\n\n// Gravação no InfluxDB\nmsg.payload = {\n    type: nomeAtividade,\n    duracao_segundos: req.duration || 0,\n    // Dados de Temperatura\n    temp_minima: minTemp,\n    temp_maxima: maxTemp,\n    temp_media: avgTemp,\n    temperatures: JSON.stringify(temps),\n    // Dados de BPM\n    bpm_minimo: minBpm,\n    bpm_medio: avgBpm,\n    bpm_maximo: maxBpm,\n    bpm_history: JSON.stringify(bpms),\n    // Outros dados\n    distance: req.distance || 0,\n    route: JSON.stringify(req.route || [])\n};\n\nmsg.measurement = \"heartbox\";\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 620,
+        "y": 380,
+        "wires": [
+            [
+                "809b4d99da974837"
+            ]
+        ]
+    },
+    {
+        "id": "3c7addbcbca545c3",
+        "type": "http response",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 630,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "809b4d99da974837",
+        "type": "influxdb out",
+        "z": "f6f2187d.f17ca8",
+        "influxdb": "4fb16e62804e8101",
+        "name": "Gurdar Resumo",
+        "measurement": "",
+        "precision": "",
+        "retentionPolicy": "",
+        "database": "database",
+        "precisionV18FluxV20": "ms",
+        "retentionPolicyV18Flux": "",
+        "org": "organisation",
+        "bucket": "bucket",
+        "x": 920,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "3ff2eb60fb7d8026",
+        "type": "http in",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "url": "/lista-atividades",
+        "method": "get",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 250,
+        "y": 540,
+        "wires": [
+            [
+                "e94203df3796848c"
+            ]
+        ]
+    },
+    {
+        "id": "e94203df3796848c",
+        "type": "influxdb in",
+        "z": "f6f2187d.f17ca8",
+        "influxdb": "4fb16e62804e8101",
+        "name": "",
+        "query": "SELECT * FROM heartbox ORDER BY time DESC",
+        "rawOutput": false,
+        "precision": "",
+        "retentionPolicy": "",
+        "org": "organisation",
+        "x": 610,
+        "y": 540,
+        "wires": [
+            [
+                "bfd921a3833d213f"
+            ]
+        ]
+    },
+    {
+        "id": "bfd921a3833d213f",
+        "type": "http response",
+        "z": "f6f2187d.f17ca8",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 850,
+        "y": 540,
+        "wires": []
+    },
+    {
+        "id": "c7f1a8cac0c9713e",
+        "type": "mqtt-broker",
+        "name": "",
+        "broker": "heartbox-mosquitto",
+        "port": 1883,
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "4fb16e62804e8101",
+        "type": "influxdb",
+        "hostname": "heartbox-influxdb",
+        "port": 8086,
+        "protocol": "http",
+        "database": "heartbox",
+        "name": "",
+        "usetls": false,
+        "tls": "",
+        "influxdbVersion": "1.x",
+        "url": "http://localhost:8086",
+        "timeout": 10,
+        "rejectUnauthorized": true
+    },
+    {
+        "id": "08c327767395a0d0",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-influxdb": "0.7.0"
+        }
+    }
+]
