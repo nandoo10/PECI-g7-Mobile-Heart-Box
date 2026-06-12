@@ -17,11 +17,11 @@ Esta pasta contém os três componentes principais de software/firmware desenvol
 ### `codigos_esp/`
 Código-fonte dos microcontroladores ESP32 utilizados no sistema (ESP32-CAM, ESP32-S3-Zero).
 
-### `thermal_app/`
-Aplicação móvel desenvolvida em Flutter.
-
 ### `fluxo_NodeRed/`
 Exportação do fluxo Node-RED utilizado no backend.
+
+### `thermal_app/`
+Aplicação móvel desenvolvida em Flutter.
 
 ---
 
