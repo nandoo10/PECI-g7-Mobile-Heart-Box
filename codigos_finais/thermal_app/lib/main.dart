@@ -21,6 +21,9 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
+////////////////////////////////////////////////////
+/// 💾 GESTOR DE SESSÃO
+////////////////////////////////////////////////////
 class SessionManager {
   static late SharedPreferences prefs;
   static bool hasActiveSession = false;
@@ -388,6 +391,9 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ─────────────────────────────────────────────────────────────────────────
+    // ALTERAÇÃO 1: Aba de Configurações substituída pelo Manual de Utilizador
+    // ─────────────────────────────────────────────────────────────────────────
     final List<Widget> pages = [
       const UserManualScreen(),
       Center(
@@ -467,7 +473,9 @@ class _ActivityMenuScreenState extends State<ActivityMenuScreen> {
   }
 }
 
-// Configurações e Manual de Utilizador
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURAÇÕES & MANUAL DO UTILIZADOR (VERSÃO CORRIGIDA)
+// ─────────────────────────────────────────────────────────────────────────────
 class UserManualScreen extends StatefulWidget {
   const UserManualScreen({super.key});
 
@@ -485,6 +493,7 @@ class _UserManualScreenState extends State<UserManualScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Cabeçalho
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(20),
@@ -542,7 +551,7 @@ class _UserManualScreenState extends State<UserManualScreen> {
 
           const SizedBox(height: 25),
 
-          // Botão 1 para configurar Placa via QR Code
+          // Botão 1: Configurar Placa via QR Code
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -563,7 +572,7 @@ class _UserManualScreenState extends State<UserManualScreen> {
 
           const SizedBox(height: 15),
 
-          // Botão 2 para o Manual do utilizador expansível
+          // Botão 2: Manual do utilizador expansível
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -581,12 +590,13 @@ class _UserManualScreenState extends State<UserManualScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
+                    // CORREÇÃO: Alterado de Border.all para BorderSide
                     side: const BorderSide(color: Colors.white10)),
               ),
             ),
           ),
 
-          // Conteúdo do Manual do Utilizador 
+          // Conteúdo do Manual do Utilizador (Apenas mostra se _showManualContent for true)
           if (_showManualContent) ...[
             const SizedBox(height: 30),
             const Padding(
@@ -741,6 +751,7 @@ class _UserManualScreenState extends State<UserManualScreen> {
                 Text(description, style: const TextStyle(color: Colors.white60, fontSize: 13, height: 1.5)),
                 if (extras != null) ...[
                   const SizedBox(height: 10),
+                  // CORREÇÃO: Forçada a tipagem explicática (_ManualExtra e) para evitar erro de Object?
                   ...extras.map((_ManualExtra e) => Padding(
                         padding: const EdgeInsets.symmetric(vertical: 3),
                         child: Row(
@@ -783,8 +794,9 @@ class _ManualExtra {
   const _ManualExtra({required this.icon, required this.label});
 }
 
-// Ecrã de seleção de atividade 
-
+// ─────────────────────────────────────────────────────────────────────────────
+// Ecrã de seleção de atividade (sem alterações)
+// ─────────────────────────────────────────────────────────────────────────────
 class ActivityScreen extends StatefulWidget {
   const ActivityScreen({super.key});
   @override
@@ -848,8 +860,9 @@ class _ActivityScreenState extends State<ActivityScreen> {
   }
 }
 
-// Ecrã de monitorização
-
+// ─────────────────────────────────────────────────────────────────────────────
+// Ecrã de monitorização — ALTERAÇÃO 2: botão QR na AppBar
+// ─────────────────────────────────────────────────────────────────────────────
 class MonitorScreen extends StatefulWidget {
   final String atividade;
   final bool retomando;
@@ -1087,11 +1100,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
               }
             }
           } else if (topic == 'heartbox/heart/bpm') {
-            // Se vier o sinal de elétrodos soltos ou falha e reinicia a calibração
+            // Se vier o sinal de elétrodos soltos (!) ou falha
             if (payload == "!") {
               setState(() {
                 currentBpm = 0;
-                _bpmCalibrationCounter = 0; 
+                _bpmCalibrationCounter = 0; // Reinicia a calibração
               });
               bpmTimeoutTimer?.cancel();
               return;
@@ -1099,20 +1112,24 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
             int newBpm = int.tryParse(payload) ?? 0;
             if (newBpm > 0) {
-              // Ignora os 3 primeiros valores
+              // IGNORAR OS 3 PRIMEIROS VALORES
               if (_bpmCalibrationCounter < 3) {
                 setState(() {
                   _bpmCalibrationCounter++;
-                  currentBpm = 0; 
+                  currentBpm = 0; // Mantém 0 para a UI mostrar "A calcular bpm"
                 });
                 return;
               }
 
-              // Guarda a partir do 4º Valor
+              // A PARTIR DO 4º VALOR: GUARDAR E MOSTRAR
               setState(() {
                 currentBpm = newBpm;
                 allBpms.add(newBpm);
+                
+                // Adiciona o ponto ao gráfico contínuo com o tempo atual
                 liveBpmSpots.add(FlSpot(seconds.toDouble(), newBpm.toDouble()));
+                
+                // Mantém apenas os últimos 60 pontos (aprox. 5 min se enviar de 5 em 5s) para não pesar na RAM
                 if (liveBpmSpots.length > 60) {
                   liveBpmSpots.removeAt(0);
                 }
@@ -1120,7 +1137,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
               
               _triggerHeartBlink();
 
-              // Timeout de 10 segundos
+              // TIMEOUT DE 10 SEGUNDOS
               bpmTimeoutTimer?.cancel();
               bpmTimeoutTimer = Timer(const Duration(seconds: 10), () {
                 if (mounted) {
@@ -1333,7 +1350,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
           title: Text(widget.atividade),
           backgroundColor: Colors.transparent,
           actions: [
-            // Botão para o Mapa
+            // Botão Mapa
             IconButton(
                 icon: Icon(Icons.map_rounded,
                     color: showMap ? AppColors.primary : Colors.white38),
@@ -1341,7 +1358,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                       showMap = !showMap;
                       if (showMap) showThermal = false;
                     })),
-            // Botão para a Câmara Térmica
+            // Botão Câmara Térmica
             IconButton(
                 icon: Icon(Icons.camera_alt,
                     color: showThermal ? AppColors.primary : Colors.white38),
@@ -1349,7 +1366,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
                       showThermal = !showThermal;
                       if (showThermal) showMap = false;
                     })),
-            // Botão para scan do QR Code
+            // ─────────────────────────────────────────────────────────────
+            // ALTERAÇÃO 2: Botão QR Code durante a atividade
+            // ─────────────────────────────────────────────────────────────
             IconButton(
               icon: const Icon(Icons.qr_code_scanner_rounded,
                   color: Colors.white60),
@@ -1560,6 +1579,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                             size: heartBlinkState ? 28 : 22),
                       ),
                       const SizedBox(width: 8),
+                      // LÓGICA DE TEXTO DINÂMICO
                       if (currentBpm > 0)
                         Text("$currentBpm bpm",
                             style: TextStyle(
@@ -1609,6 +1629,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
       );
     }
 
+    // Lógica do Eixo X dinâmico: Começa em 0 e vai deslizando os últimos 60 segundos
     double maxX = seconds.toDouble();
     double minX = maxX > 60 ? maxX - 60 : 0;
 
@@ -1634,8 +1655,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
           Expanded(
             child: LineChart(
               LineChartData(
-                minY: 50, 
-                maxY: 200,
+                minY: 50, // Delimitado a 50
+                maxY: 200, // Delimitado a 200
                 minX: minX,
                 maxX: maxX,
                 clipData: const FlClipData.all(),
@@ -1820,8 +1841,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
       "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // Histórico
-
+// ─────────────────────────────────────────────────────────────────────────────
 class ActivityLogScreen extends StatefulWidget {
   final List<ActivityData> activities;
   final VoidCallback onRefresh;
@@ -1913,8 +1935,9 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   }
 }
 
-// Detalhe de atividade 
-
+// ─────────────────────────────────────────────────────────────────────────────
+// Detalhe de atividade — ALTERAÇÃO 3: mapa com tiles reais no histórico
+// ─────────────────────────────────────────────────────────────────────────────
 class ActivityDetailScreen extends StatelessWidget {
   final ActivityData activity;
   const ActivityDetailScreen({super.key, required this.activity});
@@ -1971,7 +1994,7 @@ class ActivityDetailScreen extends StatelessWidget {
         body: TabBarView(
           physics: const NeverScrollableScrollPhysics(),
           children: [
-            // Tab da Temperatura 
+            // ── Tab Temperatura ──────────────────────────────────────────
             Column(
               children: [
                 Padding(
@@ -2094,7 +2117,7 @@ class ActivityDetailScreen extends StatelessWidget {
               ],
             ),
 
-            // Tab do Percurso 
+            // ── Tab Percurso — ALTERAÇÃO 3 ───────────────────────────────
             Column(
               children: [
                 Expanded(
@@ -2118,12 +2141,14 @@ class ActivityDetailScreen extends StatelessWidget {
                                       bounds: routeBounds,
                                       padding: const EdgeInsets.all(50))
                                   : null,
+                              // Interação ativada para permitir zoom/pan no histórico
                               interactionOptions: const InteractionOptions(
                                 flags: InteractiveFlag.pinchZoom |
                                     InteractiveFlag.drag,
                               ),
                             ),
                             children: [
+                              // ── TILE LAYER (mapa real) adicionado ──
                               TileLayer(
                                 urlTemplate:
                                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -2186,7 +2211,7 @@ class ActivityDetailScreen extends StatelessWidget {
               ],
             ),
 
-            // Tab do BPM 
+            // ── Tab BPM ──────────────────────────────────────────────────
             Padding(
               padding: const EdgeInsets.all(24),
               child: validBpms.isEmpty
@@ -2300,8 +2325,9 @@ class ActivityDetailScreen extends StatelessWidget {
       "${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // Modelo de dados
-
+// ─────────────────────────────────────────────────────────────────────────────
 class ActivityData {
   final String? id;
   final String type;
@@ -2324,8 +2350,9 @@ class ActivityData {
       this.bpmReadings = const []});
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // QR Scanner
-
+// ─────────────────────────────────────────────────────────────────────────────
 class QRScannerScreen extends StatefulWidget {
   const QRScannerScreen({super.key});
   @override
@@ -2386,8 +2413,9 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // Configuração Wi-Fi via BLE
-
+// ─────────────────────────────────────────────────────────────────────────────
 class WifiConfigScreen extends StatefulWidget {
   final String targetName;
   const WifiConfigScreen({super.key, required this.targetName});
@@ -2416,7 +2444,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
       statusMessage = "A procurar as placas (${widget.targetName})...";
     });
 
-    // MACs 
+    // MACs já a ser processados (substitui o booleano isConnecting global)
     final Set<String> processingMacs = {};
     final Set<String> configuredMacs = {};
     int configuredCount = 0;
@@ -2432,7 +2460,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
     const String UUID_PASS     = "c1c4b63b-bf3b-4e35-9077-d5426226c710";
     const String UUID_SERVERIP = "0c954d7e-9249-456d-b949-cc079205d393";
 
-    // Configura uma placa com retry de até 3 tentativas
+    // Configura uma placa com retry (até 3 tentativas)
     Future<bool> _configurarPlaca(ScanResult r) async {
       const int maxRetries = 3;
       for (int attempt = 1; attempt <= maxRetries; attempt++) {
@@ -2503,6 +2531,8 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
               advertisedUuids.any((u) => knownServiceUuids.contains(u));
 
           if (!isOurBoard) continue;
+
+          // Marca como em processo e lança tarefa paralela
           processingMacs.add(mac);
 
           _configurarPlaca(r).then((success) {
@@ -2529,7 +2559,7 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
                     () => Navigator.pop(context));
               }
             } else {
-              // Falhou e retira do set para permitir nova tentativa no scan
+              // Falhou — retira do set para permitir nova tentativa no scan
               processingMacs.remove(mac);
               if (mounted) {
                 setState(() => statusMessage =
@@ -2643,8 +2673,9 @@ class _WifiConfigScreenState extends State<WifiConfigScreen> {
   }
 }
 
-// Câmara térmica
-
+// ─────────────────────────────────────────────────────────────────────────────
+// Câmara térmica (CustomPainter)
+// ─────────────────────────────────────────────────────────────────────────────
 class ThermalPainter extends CustomPainter {
   final List<int> rawBytes;
   ThermalPainter(this.rawBytes);
