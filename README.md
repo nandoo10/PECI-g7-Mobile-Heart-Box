@@ -4,11 +4,9 @@ O projeto **Mobile HeartBox** propõe um sistema de telemetria desportiva e moni
 
 O sistema combina hardware com uma infraestrutura Cloud escalável, de forma a entregar monitorização em tempo real e análise histórica.
 
-Este repositório está organizado em três componentes principais: firmware ESP32, aplicação móvel (Flutter) e backend (Node-RED)
+Este repositório está organizado em três componentes principais: firmware ESP32, aplicação móvel (Flutter) e backend (Node-RED).
 
-
-# Acrescentem aqui a parte das esps e do node red se for necessario!!!
-
+---
 
 # Códigos Finais — Mobile HeartBox
 
@@ -18,11 +16,31 @@ Esta pasta contém os três componentes principais de software/firmware desenvol
 
 ### `codigos_esp/`
 Código-fonte dos microcontroladores ESP32 utilizados no sistema (ESP32-CAM, ESP32-S3-Zero).
+
 ### `thermal_app/`
-Aplicação móvel desenvolvida em Flutter
+Aplicação móvel desenvolvida em Flutter.
 
 ### `fluxo_NodeRed/`
-Exportação do fluxo Node-RED utilizado no backend
+Exportação do fluxo Node-RED utilizado no backend.
+
+---
+
+## Acrescentem aqui a parte das esps !!!
+
+---
+
+## Fluxo Node-RED — `fluxo_NodeRed/`
+
+Esta pasta contém a exportação do fluxo Node-RED utilizado no backend do sistema.
+
+### Como importar
+
+1. Abrir o Node-RED
+2. Menu (☰) → **Import**
+3. Colar/selecionar o ficheiro JSON do fluxo
+4. **Import**
+
+> Nota: requer o módulo `node-red-contrib-influxdb` instalado (Manage palette → Install).
 
 ---
 
@@ -93,6 +111,8 @@ As dependências encontram-se no ficheiro `pubspec.yaml`.
 ---
 
 > **Nota:** Projeto desenvolvido em Flutter para Android.
+
+---
 
 ## Autores
 
