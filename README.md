@@ -6,6 +6,8 @@ O sistema combina hardware com uma infraestrutura Cloud escalável, de forma a e
 
 Este repositório está organizado em três componentes principais: firmware ESP32, aplicação móvel (Flutter) e backend (Node-RED).
 
+> **Aviso importante:** O backend (Mosquitto, Node-RED, InfluxDB e Grafana) foi desenvolvido e testado num servidor Cloud na Azure, que tem um tempo limite de funcionamento e poderá já não estar ativo. Para testar o projeto, é necessário substituir o IP do servidor configurado nas ESPs (via BLE, na app, ou diretamente no código) pelo IP do computador onde o backend estiver a correr localmente.
+
 ---
 
 # Códigos Finais — Mobile HeartBox
@@ -17,15 +19,89 @@ Esta pasta contém os três componentes principais de software/firmware desenvol
 ### `codigos_esp/`
 Código-fonte dos microcontroladores ESP32 utilizados no sistema (ESP32-CAM, ESP32-S3-Zero).
 
-### `fluxo_NodeRed/`
-Exportação do fluxo Node-RED utilizado no backend.
-
 ### `thermal_app/`
 Aplicação móvel desenvolvida em Flutter.
 
+### `fluxo_NodeRed/`
+Exportação do fluxo Node-RED utilizado no backend.
+
 ---
 
-## Acrescentem aqui a parte das esps !!!
+## Firmware ESP32 — `codigos_esp/`
+
+Esta pasta contém o firmware das três placas utilizadas no sistema, desenvolvido em **Arduino IDE**. Cada placa deve ficar na sua própria subpasta, com o `.ino` correspondente:
+
+```
+codigos_esp/
+├── esp32_cam/
+│   └── esp32_cam.ino
+├── esp32_s3/
+│   └── esp32_s3.ino
+└── esp32_s3_zero/
+    └── esp32_s3_zero.ino
+```
+
+### Ambiente de desenvolvimento
+
+- **Arduino IDE** (2.x)
+- Boards Manager: instalar o package **"esp32 by Espressif Systems"**
+
+### 1. `esp32_cam/` — Câmara térmica (ESP32-CAM)
+
+Responsável pela leitura do sensor térmico MLX90640, RTC e envio de dados via MQTT/BLE.
+
+**Board:** AI Thinker ESP32-CAM (ou equivalente com módulo de câmara)
+
+**Bibliotecas necessárias (Library Manager):**
+- `PubSubClient`
+- `RTClib` (Adafruit)
+- `Adafruit MLX90640`
+- `Adafruit BusIO` (dependência do MLX90640)
+- ESP32 core já inclui: `WiFi`, `Wire`, `Preferences`, `BLEDevice`/`BLEServer`/`BLEUtils`/`BLE2902`, `esp_camera`
+
+**Notas de upload:**
+- Pode ser necessário ligar o pino **GPIO0 ao GND** durante o upload (modo de flash) e desligar depois para correr o programa
+- Verificar **Partition Scheme**: recomenda-se "Huge APP" devido ao uso da câmara
+
+---
+
+### 2. `esp32_s3/` — Sensores biométricos (ESP32-S3)
+
+Responsável pela leitura de ECG (BPM), GPS, IMU (deteção de quedas) e comunicação MQTT/BLE.
+
+**Board:** ESP32S3 Dev Module
+
+**Bibliotecas necessárias (Library Manager):**
+- `PubSubClient`
+- `TinyGPSPlus`
+- `Waveshare_10Dof-D` (biblioteca do IMU — verificar se foi instalada via .zip/manual)
+- ESP32 core já inclui: `WiFi`, `Wire`, `Preferences`, `BLEDevice`/`BLEServer`/`BLEUtils`/`BLE2902`
+
+**Configurações da board:**
+- USB Mode: conforme variante da placa (USB-OTG ou Hardware CDC, dependendo do board específico)
+- Verificar pinos definidos no código (`SDA_PIN`, `SCL_PIN`, `RXD2`, `TXD2`, `LO_PLUS`, `LO_MINUS`, `ECG_PIN`) correspondem à fiação real
+
+---
+
+### 3. `esp32_s3_zero/` — Sensor de proximidade (ESP32-S3-Zero)
+
+Responsável pela leitura do sensor mmWave (proximidade de obstáculos) e envio de alertas via MQTT/BLE.
+
+**Board:** ESP32S3 Dev Module (variante Zero)
+
+**Bibliotecas necessárias (Library Manager):**
+- `PubSubClient`
+- ESP32 core já inclui: `WiFi`, `Preferences`, `BLEDevice`/`BLEServer`/`BLEUtils`/`BLE2902`, `HardwareSerial`
+
+**Notas:**
+- Sensor mmWave ligado via UART (`RX_PIN`/`TX_PIN` — verificar no código)
+- Configuração inicial (Wi-Fi/MQTT) é feita via Bluetooth (BLE) na primeira utilização
+
+---
+
+### Configuração comum (todas as placas)
+
+Todas as placas usam `Preferences` para guardar SSID, password e IP do servidor MQTT, configurados via BLE. Se não houver credenciais guardadas, a placa entra automaticamente em modo BLE para configuração.
 
 ---
 
@@ -111,6 +187,19 @@ As dependências encontram-se no ficheiro `pubspec.yaml`.
 ---
 
 > **Nota:** Projeto desenvolvido em Flutter para Android.
+
+---
+
+## Procedimento de utilização
+
+Para um utilizador, o procedimento é o seguinte:
+
+1. Ligar o telemóvel à rede Wi-Fi a usar (caso não sejam dados móveis)
+2. Entrar na app
+3. Fazer scan ao QR da caixa
+4. Começar uma atividade e verificar se todos os dados estão a ser lidos
+5. Caso estejam, realizar a atividade e, no fim, visualizar o histórico
+6. Caso não estejam, dar scan novamente até que todas as ESPs estejam a funcionar corretamente
 
 ---
 
